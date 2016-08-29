@@ -18,7 +18,7 @@ var banner = ['/*!\n',
 
 // Compile sass files from /sass into /css
 gulp.task('sass', function() {
-    return gulp.src('sass/agency.sass')
+    return gulp.src('scss/agency.scss')
         .pipe(sass())
         .pipe(header(banner, { pkg: pkg }))
         .pipe(gulp.dest('css'))
@@ -83,22 +83,22 @@ gulp.task('browserSync', function() {
 
 // Dev task with browserSync
 gulp.task('dev', ['browserSync', 'sass', 'minify-css', 'minify-js'], function() {
-    gulp.watch('sass/*.scss', ['sass']);
-    gulp.watch('css/*.css', ['minify-css']);
+    gulp.watch('scss/*.scss', ['sass']);
+    gulp.watch('css/*.css', ['minify-css'], browserSync.reload);
     gulp.watch('js/*.js', ['minify-js']);
-    // Reloads the browser whenever HTML or JS files change
+    // Reloads the browser whenever HTML, CSS, or JS files change
     gulp.watch('*.html', browserSync.reload);
     gulp.watch('js/**/*.js', browserSync.reload);
 });
 
 // Compiles SCSS files from /scss into /css
 // NOTE: This theme uses sass by default. To swtich to SCSS you will need to update this gulpfile by changing the 'sass' tasks to run 'sass'!
-gulp.task('sass', function() {
-    return gulp.src('scss/agency.scss')
-        .pipe(sass())
-        .pipe(header(banner, { pkg: pkg }))
-        .pipe(gulp.dest('css'))
-        .pipe(browserSync.reload({
-            stream: true
-        }))
-});
+// gulp.task('sass', function() {
+//     return gulp.src('scss/agency.scss')
+//         .pipe(sass())
+//         .pipe(header(banner, { pkg: pkg }))
+//         .pipe(gulp.dest('css'))
+//         .pipe(browserSync.reload({
+//             stream: true
+//         }))
+// });
