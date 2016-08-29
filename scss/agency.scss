@@ -1,5 +1,6 @@
 @import "variables.scss";
 @import "mixins.scss";
+@import "mobile";
 
 // Global Components
 
@@ -180,14 +181,14 @@ header {
         .intro-lead-in {
             @include serif-font;
             font-style: italic;
-            font-size: 22px;
+            font-size: 12px;
             line-height: 22px;
             margin-bottom: 25px;
         }
         .intro-heading {
             @include heading-font;
             font-weight: 700;
-            font-size: 50px;
+            font-size: 25px;
             line-height: 50px;
             margin-bottom: 25px;
         }
