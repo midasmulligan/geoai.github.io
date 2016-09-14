@@ -653,3 +653,18 @@ body {
 
 .intro-heading {
   font-size: 25px; }
+
+.body-font-size p {
+  font-size: 1.75rem; }
+
+section#about {
+  padding: 100px 0 50px 0; }
+
+section#services {
+  padding: 50px 0 100px 0; }
+
+section h2.section-heading {
+  margin-bottom: 3rem; }
+
+hr.content-separator {
+  width: 100px; }
