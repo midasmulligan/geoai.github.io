@@ -1,2 +1,17 @@
 // QGS.IO Landing Page
 //   October 2016
+/*
+
+  All files are organized into sections, labeled and divided as well as I could
+  at the time. They are collected and injected into the main file by the collector.
+  The collector is referenced below. If you add any files be sure to reference them
+  in the appropriate order either here, or in the collector.
+
+*/
+// COLLECTIONS
+@import 'collector/main';
+
+// SETTINGS
+
+$Brand_Typeface                   = $Dosis;
+$Brand_Color                      = $white;
