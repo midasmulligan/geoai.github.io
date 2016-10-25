@@ -10,11 +10,13 @@
   </head>
   <body>
 
+
 <!-- ================================================================ -->
 
- <section class="panel-header">
+
+ <section id="panel-header" class="panel-header">
     <header>
-      <section class="brand">QGS Technologies</section>
+      <h1 class="brand">QGS Technologies</h1>
       <nav>
           <a href="#">home</a>
           <a href="about.html">About Us</a>
@@ -23,6 +25,7 @@
       </nav>
     </header>
  </section>
+
 
 <!-- ================================================================ -->
 
@@ -83,11 +86,13 @@
     <!-- bower:js -->
     <!-- endbower -->
     <script src="js/three.min.js"></script>
+    <script src="js/CanvasRenderer.js"></script>
+    <script src="js/Projector.js"></script>
     <script src="js/app.js"></script>
     <script>
-      window.onload({
-	networkInteractiveAnimation();
-      });
+      window.onload = function () {
+	networkInteractiveAnimation()
+      };
     </script>
   </body>
 </html>

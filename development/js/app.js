@@ -14,11 +14,11 @@ var networkInteractiveAnimation = (function() {
 			function init() {
 				var container, separation = 100, amountX = 50, amountY = 50,
 				particles, particle;
-				container = document.getElementById("panel-landing");
-				document.body.appendChild(container);
+				container = document.getElementById("panel-header");
 				camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 1, 10000 );
-				camera.position.z = 100;
+				camera.position.z = 80;
 				scene = new THREE.Scene();
+				scene.background = new THREE.Color( 0x57728B );
 				renderer = new THREE.CanvasRenderer();
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
@@ -30,7 +30,7 @@ var networkInteractiveAnimation = (function() {
 					program: function ( context ) {
 						context.beginPath();
 						context.arc( 0, 0, 0.5, 0, PI2, true );
-						context.fill();
+                                                context.fill();
 					}
 				} );
 				var geometry = new THREE.Geometry();

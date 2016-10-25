@@ -5,10 +5,30 @@ $Dosis                      : "Dosis", "Helvetica Neue", "Helvetica", sans-serif
 $Droid_Sans                 : "Droid Sans", "Helvetica Neue", "Helvetica", sans-serif;
 $Libre_Franklin             : "Libre Franklin", "Helvetica Neue", "Helvetica", sans-serif;
 
-// SECTIONS
+// SECTION
+
+body {
+  font-family: $Dosis;
+}
 
 header {
+  font-family: $Dosis;
+  color: $white;
 
+  &> .brand {
+    font-family: $Libre_Franklin;
+  }
+
+  & a {
+    color: $white;
+    text-decoration: none;
+    display: inline-block;
+    padding-left: 3em;
+    padding-right: 3em;
+    padding-top: 1em;
+    padding-bottom: 1em;
+    outline: 0;
+  }
 }
 
 //
