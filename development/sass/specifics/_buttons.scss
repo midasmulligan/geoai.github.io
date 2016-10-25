@@ -1,0 +1,35 @@
+/// buttons styles
+button {
+
+  &.demo {
+    display: block;
+
+    width: 60%;
+    max-width: 750px;
+    height: 85px;
+
+    background-color: $red;
+    color: $white;
+
+    border-radius: 4px;
+
+    text-decoration: none;
+
+    border:0;
+    outline: 0;
+
+    user-select: none;
+    user-drag: none;
+
+    &:hover {
+      background-color: $white;
+      color: $brand-blue;
+
+      border: 2px solid $brand-blue;
+    }
+    &:active {
+      filter: darken(5%);
+    }
+  }
+
+}

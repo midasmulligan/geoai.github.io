@@ -1,0 +1,23 @@
+/// typography styles
+@import url('https://fonts.googleapis.com/css?family=Dosis|Droid+Sans|Libre+Franklin');
+// Font Variables
+$Dosis                      = "Dosis", "Helvetica Neue", "Helvetica", sans-serif;
+$Droid_Sans                 = "Droid Sans", "Helvetica Neue", "Helvetica", sans-serif;
+$Libre_Franklin             = "Libre Franklin", "Helvetica Neue", "Helvetica", sans-serif;
+
+// SECTIONS
+
+header {
+
+}
+
+//
+
+footer {
+  color: $footer-default;
+
+  &.extended {
+    background-color: $brand-blue-deep;
+    color:$brand-blue-light;
+  }
+}
