@@ -19,6 +19,7 @@ var networkInteractiveAnimation = (function() {
 				camera.position.z = 80;
 				scene = new THREE.Scene();
 				scene.background = new THREE.Color( 0x57728B );
+				scene.fog = new THREE.Fog( 0x000000, 0.15, 1000);
 				renderer = new THREE.CanvasRenderer();
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
@@ -26,7 +27,7 @@ var networkInteractiveAnimation = (function() {
 				// particles
 				var PI2 = Math.PI * 2;
 				var material = new THREE.SpriteCanvasMaterial( {
-					color: 0xffffff,
+					color: 0xf4fcff,
 					program: function ( context ) {
 						context.beginPath();
 						context.arc( 0, 0, 0.5, 0, PI2, true );
@@ -34,7 +35,7 @@ var networkInteractiveAnimation = (function() {
 					}
 				} );
 				var geometry = new THREE.Geometry();
-				for ( var i = 0; i < 100; i ++ ) {
+				for ( var i = 0; i < 160; i ++ ) {
 					particle = new THREE.Sprite( material );
 					particle.position.x = Math.random() * 2 - 1;
 					particle.position.y = Math.random() * 2 - 1;

@@ -28,6 +28,14 @@ header {
     padding-top: 1em;
     padding-bottom: 1em;
     outline: 0;
+    transition: all 140ms ease-in-out;
+
+    background-color: rgba(0, 0, 0,0.3);
+
+    &:hover {
+      animation: navButton 200ms ease-in-out;
+      animation-iteration-count: 1;
+    }
   }
 }
 
