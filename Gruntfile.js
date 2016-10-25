@@ -26,7 +26,7 @@ module.exports = function(grunt) {
     // browser sync task
     browserSync: {
       bsFiles: {
-        src : ['development/**/*.{html,css,jpg,png,svg,js}']
+        src : ['development/**/*.{html,css,jpg,png,svg,js}', '!development/js/three.min.js']
       },
       options: {
         watchTask: true,

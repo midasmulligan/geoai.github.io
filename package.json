@@ -12,7 +12,6 @@
     "grunt-contrib-imagemin": "^1.0.0",
     "grunt-contrib-jshint": "^0.11.3",
     "grunt-contrib-watch": "^0.6.1",
-    "grunt-spritesmith": "^6.2.0",
     "grunt-copy-to": "0.0.12",
     "grunt-html": "^5.0.1",
     "grunt-jsdoc": "^1.0.0",
@@ -20,9 +19,15 @@
     "grunt-sass": "^1.0.0",
     "grunt-sassdoc": "^2.0.1",
     "grunt-scss-lint": "^0.3.8",
+    "grunt-spritesmith": "^6.2.0",
     "grunt-wiredep": "^2.0.0",
+    "gulp": "^3.9.1",
+    "gulp-sass": "^2.3.2",
+    "gulp-sourcemaps": "^2.2.0",
+    "gulp-uglify": "^2.0.0",
     "load-grunt-tasks": "^3.3.0",
     "pixrem": "^3.0.0",
+    "pump": "^1.0.1",
     "time-grunt": "^1.2.1"
   }
 }

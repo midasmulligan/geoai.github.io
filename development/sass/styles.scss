@@ -1,6 +1,10 @@
 // bower:scss
 // endbower
 
+// Vendor Files
+@import 'vendor/normalize';
+
+// Custom Files
 @import 'base/variables';
 @import 'base/mixins';
 @import 'base/base';
