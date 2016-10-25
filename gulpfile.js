@@ -12,10 +12,10 @@ paths = {
   scripts: 'development/js/app.js',
   html: 'development/index.html',
   images: 'build/images/*',
-  buildStyles: 'build/css/styles.css',
-  buildScripts: 'build/js/app.js',
-  buildHtml: 'build/index.html',
-  buildImages: 'build/images/*'
+  buildStyles: 'build/css',
+  buildScripts: 'build/js',
+  buildHtml: 'build',
+  buildImages: 'build/images'
 }
 
 gulp.task('sass', function() {

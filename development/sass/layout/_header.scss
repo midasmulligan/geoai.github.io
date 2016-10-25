@@ -12,5 +12,20 @@ header {
   }
 
 
+}
+
+// Full-frame panel
+
+.panel {
+
+  &-header {
+    background-color: $brand-blue; 
+
+    width: 100vw;
+    height: 100vh;
+
+    margin: 0;
+    padding: 0;
+  }
 
 }
