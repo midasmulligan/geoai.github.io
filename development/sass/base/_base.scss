@@ -1,6 +1,50 @@
 /// Base styles
 
-body {
-  min-width: 320px;
+header,
+header a,
+.brand,
+img
+{
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -o-user-select: none;
+  -khtml-user-select: none;
+  user-select: none;  
+  -webkit-user-drag: none;
+  -moz-user-drag: none;
+  -ms-user-drag: none;
+  -o-user-drag: none;
+  -khtml-user-drag: none;
 }
 
+body {
+  overflow-x: hidden;
+}
+
+
+.brand-logo {
+
+	$logo-size	:	3.5em;
+
+    background-image: url(../images/QGSLogo_SolidBold.png);
+    background-size: cover;
+    background-position: top left;
+    width: $logo-size;
+    height: $logo-size;
+    text-indent: -9999px;
+    content: '';    
+  
+    margin-right: 0.5em;
+ 
+    vertical-align: middle;
+ 
+    display: inline-block;
+
+    transition: all 23450ms ease-in-out;
+
+    &:hover {
+      filter: hue-rotate(30000deg); 
+    }
+
+}

@@ -5,6 +5,7 @@ var sass = require('gulp-sass');
 var smap = require('gulp-sourcemaps');
 var ugly = require('gulp-uglify');
 var pump = require('pump');
+var pref = require('gulp-autoprefixer');
 var paths;
 
 paths = {
@@ -22,6 +23,8 @@ gulp.task('sass', function() {
   pump([
     gulp.src(paths.sass),
     sass().on('error', sass.logError),
+    smap.write(),
+    pref(),
     gulp.dest(paths.buildStyles)
   ]);
 });

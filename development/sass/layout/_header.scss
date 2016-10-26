@@ -3,9 +3,10 @@ header {
   position: fixed;
   z-index: 9000;
 
-  width: 100%;
+  width: 100vw;
   height: 100px;
 
+  margin: 0;
   margin-top: 20px;
 
   background-color: transparent;
@@ -44,6 +45,6 @@ header {
 
 canvas {
 
-  background-color: $brand-blue;
+  background-color: $black;
 
 }

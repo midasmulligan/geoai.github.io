@@ -1,0 +1,16 @@
+// Home
+
+.content {
+
+  width: 100vw;
+  height: 100vh;
+
+  display: flex;
+  align-content: center;
+  justify-content: center;
+  flex-direction: column;
+
+  & > section {
+    flex-grow: 50%;
+  }
+}

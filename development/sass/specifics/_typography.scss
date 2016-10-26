@@ -1,22 +1,31 @@
 /// typography styles
-@import url('https://fonts.googleapis.com/css?family=Dosis|Droid+Sans|Libre+Franklin');
+@import url('https://fonts.googleapis.com/css?family=Dosis:200,300,400|Source+Sans+Pro:200,200i,300,400,600,900');
 // Font Variables
 $Dosis                      : "Dosis", "Helvetica Neue", "Helvetica", sans-serif;
-$Droid_Sans                 : "Droid Sans", "Helvetica Neue", "Helvetica", sans-serif;
-$Libre_Franklin             : "Libre Franklin", "Helvetica Neue", "Helvetica", sans-serif;
+$Source_Sans		    : "Source Sans Pro", "Helvetica Neue", "Helvetica", sans-serif;
 
-// SECTION
+//	BODY / HEADER
+* {
+  text-rendering: optimizeLegibility;
+}
 
 body {
-  font-family: $Dosis;
+  font-family: $Source_Sans;
+  font-weight: 200;
+  font-size: 1.1em;
 }
 
 header {
-  font-family: $Dosis;
+  font-family: "Helvetica", "Arial", $Source_Sans;
+  font-weight: 100;
+  font-weight: 200;
   color: $white;
 
   &> .brand {
-    font-family: $Libre_Franklin;
+    font-family: "Helvetica", "Arial", $Source_Sans; 
+    font-weight: 200;
+    font-size: 1.75em;
+    text-shadow: 1 1 1em rgba(0,0,0,0.2), -1 -1 1em rgba(0,0,0,0.2), 1 -1 1em rbga(0,0,0,0.2), -1 1 1em rgba(0,0,0,0.2);
   }
 
   & a {
@@ -28,18 +37,66 @@ header {
     padding-top: 1em;
     padding-bottom: 1em;
     outline: 0;
-    transition: all 140ms ease-in-out;
+    transition: all 240ms ease-in-out;
+
+    vertical-align: middle;
+
+    font-size: 1.2em;
 
     background-color: rgba(0, 0, 0,0.3);
 
     &:hover {
-      animation: navButton 200ms ease-in-out;
+      animation: navButton 250ms ease-in-out;
       animation-iteration-count: 1;
+      background-color: rgba(255,255,255,0.76);
+      color: $black;
+    }
+    &:active {
+      background-color: rgba(255,255,255,0.6);
     }
   }
 }
 
-//
+//	CONTENT (HOME)
+
+.content {
+
+  font-size: 1.4em;
+
+  & > article {
+    text-align: center;
+    margin-left: 10%;
+    margin-right: 10%;
+
+  }
+  & > .panel {
+
+
+    &-1 {
+
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+
+    }
+
+    &-2 {
+     
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+
+      & > p {
+        font-size: 1.625em;
+      }
+ 
+    }
+
+  }
+}
+
+
+//	FOOTER
 
 footer {
   color: $footer-default;
