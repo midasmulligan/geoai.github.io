@@ -18,36 +18,32 @@
     <header>
       <h1 class="brand"><span class="brand-logo"></span>Technologies</h1>
       <nav>
-          <a href="#">Home</a>
-          <a href="about.html">Information</a>
-          <a href="solutions.html">Solutions</a>
-          <a href="contact.html">Contact</a>
+          <a href="#/" id="navHome">Home</a>
+          <a href="#/" id="navInfo">Information</a>
+          <a href="#/" id="navSolu">Solutions</a>
+          <a href="#/" id="navCont">Contact</a>
       </nav>
     </header>
- </section>
 
+    <section class="content">
 
-<!-- ================================================================ -->
+      <article class="panel-1">
+        <h2>Outpaced No Longer</h2>
+        <p>
+          Aenean blandit nisi ut sem malesuada, et efficitur elit egestas. Morbi tincidunt nibh ac gravida molestie. Ut vel nibh nec enim semper tincidunt. Nunc aliquam ut libero ac molestie. Sed sodales nibh non mi lacinia feugiat. Donec sit amet dolor cursus eros accumsan posuere sit amet quis mi. Duis quis laoreet enim. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Mauris id cursus lectus. Fusce varius tincidunt nisi mollis consectetur. Duis ut ex eros.
+        </p>
+      </article>
 
+      <article class="panel-2">
+        <h2>Interested?</h2>
+        <p>
+          Feel free to book a demo with us so that you can test our platform against your expectations.
+        </p>
+        <button class="demo">Schedule a Demo</button>
+      </article>
 
-  <section class="content">
-
-    <article class="panel-1">
-      <h2>Outpaced No Longer</h2>
-      <p>
-        Aenean blandit nisi ut sem malesuada, et efficitur elit egestas. Morbi tincidunt nibh ac gravida molestie. Ut vel nibh nec enim semper tincidunt. Nunc aliquam ut libero ac molestie. Sed sodales nibh non mi lacinia feugiat. Donec sit amet dolor cursus eros accumsan posuere sit amet quis mi. Duis quis laoreet enim. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Mauris id cursus lectus. Fusce varius tincidunt nisi mollis consectetur. Duis ut ex eros.
-      </p>
-    </article>
-
-    <article class="panel-2">
-      <h2>Interested?</h2>
-      <p>
-        Feel free to book a demo with us so that you can test our platform against your expectations.
-      </p>
-      <button class="demo">Schedule a Demo</button>
-    </article>
-
-  </section>
+    </section>
+</section>
 
 
 <!-- ================================================================ -->
@@ -92,7 +88,7 @@
     <script>
       window.onload = function () {
 	networkInteractiveAnimation()
-        headerHandler();
+	navHandler();
       };
     </script>
   </body>

@@ -113,4 +113,35 @@ var headerHandler = (function () {
 	}
 });
 
+var navHandler = (function () {
 
+	var navHome = document.getElementById('navHome'),
+	    navInfo = document.getElementById('navInfo'),
+	    navSolu = document.getElementById('navSolu'),
+	    navCont = document.getElementById('navCont');
+
+	var setActive = (function (el) {
+
+		var target = document.getElementById(el);
+
+		document.getElementsByClassName('active').classList.remove('active');
+
+		target.classList.add('active');
+
+	});
+
+
+	navHome.addEventListener('onmouseup', function(e) {
+		setActive('panel-1');
+	});
+	navInfo.addEventListener('onmouseup', function(e) {
+		setActive('panel-2');
+	});
+	navSolu.addEventListener('onmouseup', function(e) {
+		setActive('panel-3');
+	});
+	navCont.addEventListener('onmouseup', function(e) {
+		setActive('panel-4');
+	});
+
+});
