@@ -27,19 +27,34 @@
 
     <section class="content">
 
-      <article class="panel-1">
+      <article id="panel-1" class="active" >
         <h2>Outpaced No Longer</h2>
         <p>
           Aenean blandit nisi ut sem malesuada, et efficitur elit egestas. Morbi tincidunt nibh ac gravida molestie. Ut vel nibh nec enim semper tincidunt. Nunc aliquam ut libero ac molestie. Sed sodales nibh non mi lacinia feugiat. Donec sit amet dolor cursus eros accumsan posuere sit amet quis mi. Duis quis laoreet enim. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Mauris id cursus lectus. Fusce varius tincidunt nisi mollis consectetur. Duis ut ex eros.
         </p>
       </article>
 
-      <article class="panel-2">
+      <article id="panel-2" >
         <h2>Interested?</h2>
         <p>
           Feel free to book a demo with us so that you can test our platform against your expectations.
         </p>
         <button class="demo">Schedule a Demo</button>
+      </article>
+
+      <article id="panel-3" >
+        <h2>Solutions</h2>
+        <p>
+Aenean blandit nisi ut sem malesuada, et efficitur elit egestas. Morbi tincidunt nibh ac gravida molestie. Ut vel nibh nec enim semper tincidunt. Nunc aliquam ut libero ac molestie. Sed sodales nibh non mi lacinia feugiat. Donec sit amet dolor cursus eros accumsan posuere sit amet quis mi. Duis quis laoreet enim. Lorem ipsum dolor sit amet, consectetur adipiscing elit. Mauris id cursus lectus. Fusce varius tincidunt nisi mollis consectetur. Duis ut ex eros.
+        </p>
+      </article>
+
+      <article id="panel-4" >
+        <h2>Contact</h2>
+        <p>
+          If you have any questions, please don't hesitate to get in touch. We are working on launching soon, and will be available for scheduling demonstations even sooner.
+        </p>
+        <button id="contactButton" class="demo">Email Us</button>
       </article>
 
     </section>
@@ -89,6 +104,7 @@
       window.onload = function () {
 	networkInteractiveAnimation()
 	navHandler();
+	contactButtonHandler();
       };
     </script>
   </body>

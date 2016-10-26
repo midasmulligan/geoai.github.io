@@ -1,4 +1,10 @@
-// app
+// APP
+
+/**
+ * Background Interactivity
+ *  A cluster of interconnected nodes vaguely resembling a neural network.
+ *  Not truly, but enough.
+ */
 
 var networkInteractiveAnimation = (function() {
 
@@ -93,7 +99,13 @@ var networkInteractiveAnimation = (function() {
 		camera.lookAt( scene.position );
 		renderer.render( scene, camera );
 	}
+console.log('Network app loaded.');
 });
+
+/**
+ * Header Scroll-spy Handler
+ * __Not yet implemented__
+ */
 
 var headerHandler = (function () {
 
@@ -113,35 +125,60 @@ var headerHandler = (function () {
 	}
 });
 
+/**
+ * Contact Button Handler
+ *
+ */
+
+var contactButtonHandler = (function () {
+
+	var contactButton = document.getElementById('contactButton');
+
+	contactButton.addEventListener('click', function(e) {
+		window.location.href = "mailto:info@qgstechnologies.com";
+	});
+console.log('Contact Handler loaded.');
+});
+
+/**
+ * Navigation Links Handler
+ * 
+ */
+
 var navHandler = (function () {
 
 	var navHome = document.getElementById('navHome'),
 	    navInfo = document.getElementById('navInfo'),
 	    navSolu = document.getElementById('navSolu'),
 	    navCont = document.getElementById('navCont');
+	var panHome = document.getElementById('panel-1'),
+	    panInfo = document.getElementById('panel-2'),
+	    panSolu = document.getElementById('panel-3'),
+	    panCont = document.getElementById('panel-4');
+
 
 	var setActive = (function (el) {
+		
+		panHome.className = "";
+		panInfo.className = "";
+		panSolu.className = "";
+		panCont.className = "";
 
-		var target = document.getElementById(el);
-
-		document.getElementsByClassName('active').classList.remove('active');
-
-		target.classList.add('active');
-
+		el.classList.add('active');
+		console.log('Click event. ' + el);
 	});
 
-
-	navHome.addEventListener('onmouseup', function(e) {
-		setActive('panel-1');
-	});
-	navInfo.addEventListener('onmouseup', function(e) {
-		setActive('panel-2');
-	});
-	navSolu.addEventListener('onmouseup', function(e) {
-		setActive('panel-3');
-	});
-	navCont.addEventListener('onmouseup', function(e) {
-		setActive('panel-4');
-	});
-
+	navHome.onclick = function() {
+		 setActive(panHome);
+	};
+	navInfo.onclick = function() {
+		setActive(panInfo);
+	};
+	navSolu.onclick = function() {
+		setActive(panSolu);
+	};
+	navCont.onclick = function() {
+		setActive(panCont);
+	};
+console.log('Navigation handler loaded.')
 });
