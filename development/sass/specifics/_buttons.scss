@@ -1,0 +1,57 @@
+/// buttons styles
+button {
+
+  &.demo {
+    display: block;
+
+    width: 60%;
+    max-width: 750px;
+    height: 85px;
+
+    margin-left: 50%;
+    transform: translateX(-50%);
+
+    background-color: $brand-blue;
+    color: $white;
+
+    border-radius: 4px;
+
+    text-decoration: none;
+
+    border:0;
+    outline: 0;
+
+    user-select: none;
+    user-drag: none;
+
+    transition: all 265ms ease-in-out;
+
+    font-family: $Source_Sans; 
+    font-size: 2em;
+    font-weight: 100;
+
+
+    &:hover {
+      background-color: $white;
+      color: $brand-blue;
+
+      border: 2px solid $brand-blue;
+    }
+    &:active {
+      filter: brightness(0.9);
+    }
+  }
+
+}
+
+// Phone changes
+
+@media only screen and (max-width: 760px) {
+
+  button {
+    &.demo {
+      font-size: 1.2em;
+    }
+  }
+
+}

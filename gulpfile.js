@@ -1,34 +1,84 @@
+'use strict';
+
 var gulp = require('gulp');
 var sass = require('gulp-sass');
-var pump = require('pump');
-var ugly = require('gulp-uglify');
 var smap = require('gulp-sourcemaps');
+var ugly = require('gulp-uglify');
+var pump = require('pump');
+var pref = require('gulp-autoprefixer');
+var paths;
 
 paths = {
-  sass: "./styles/scss/main.scss",
-  scripts: "./scripts/main.js",
-  styles: "./styles.css",
-  output: "./app"
-};
+  sass: 'development/sass/**/*.scss',
+  scripts: 'development/js/app.js',
+  html: 'development/index.html',
+  images: 'build/images/*',
+  buildStyles: 'build/css',
+  buildScripts: 'build/js',
+  buildHtml: 'build',
+  buildImages: 'build/images'
+}
 
 gulp.task('sass', function() {
   pump([
     gulp.src(paths.sass),
-    smap.init(),
-    sass({outputStyle: 'compressed'}).on('error', sass.logError),
+    sass().on('error', sass.logError),
     smap.write(),
-    gulp.dest(paths.styles)
-  ], cb );
+    pref(),
+    gulp.dest(paths.buildStyles)
+  ]);
 });
 
-gulp.task('scripts', function() {
-   pump([
-     gulp.src(paths.scripts),
-     uglify(),
-     gulp.dest(paths.output)
-   ], cb);
+gulp.task('uglifyjs', function() {
+  pump([
+    gulp.src(paths.scripts),
+    ugly(),
+    gulp.dest(paths.buildScripts)
+  ]);
 });
 
-gulp.task('default', function() {
-  console.log("Gulp run");
+gulp.task('htmlify', function() {
+  pump([
+    gulp.src(paths.html),
+    gulp.dest(paths.buildHtml)
+  ]);
 });
+
+gulp.task('images', function() {
+  pump([
+    gulp.src(paths.images),
+    gulp.dest(paths.buildImages)
+  ]);
+});
+
+// Watch Tasks Setup
+
+gulp.task('sass:watch', function() {
+  pump([
+    gulp.watch(paths.sass, ['sass'])
+  ]);
+});
+
+gulp.task('js:watch', function() {
+  pump([
+    gulp.watch(paths.scripts, ['uglifyjs'])
+  ]);
+});
+
+gulp.task('html:watch', function() {
+  pump([
+    gulp.watch(paths.html, ['htmlify'])
+  ]);
+});
+
+gulp.task('images:watch', function() {
+  pump([
+    gulp.watch(paths.images, ['images'])
+  ]);
+});
+
+// Default task groups
+
+gulp.task('watch', ['sass:watch', 'js:watch', 'html:watch', 'images:watch']);
+
+gulp.task('default', ['sass', 'uglifyjs', 'htmlify', 'images']);

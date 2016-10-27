@@ -1,0 +1,45 @@
+// Home
+
+.content {
+
+  width: 100vw; 
+  height: 60%;
+
+  position: absolute;
+  z-index: 8000;
+
+  left: 0;
+  top: 35%;
+
+
+  display: block; 
+
+}
+
+
+
+article#panel {
+
+  &-1 { top: -175vw; }
+  &-2 { top: -175vw; }
+  &-3 { top: -175vw; }
+  &-4 { top: -175vw; }
+
+}
+
+article[id^="panel-"] {
+  position: absolute;
+}
+
+.active {
+  top:0 !important;
+}
+
+// large phone
+@media only screen and ( min-device-width: 400px) and (max-device-width: 760px) {
+
+.active {
+  top: 20% !important;
+}
+
+}

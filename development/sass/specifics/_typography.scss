@@ -1,0 +1,154 @@
+/// typography styles
+@import url('https://fonts.googleapis.com/css?family=Dosis:200,300,400|Source+Sans+Pro:200,200i,300,400,600,900');
+// Font Variables
+$Dosis                      : "Dosis", "Helvetica Neue", "Helvetica", sans-serif;
+$Source_Sans		    : "Source Sans Pro", "Helvetica Neue", "Helvetica", sans-serif;
+
+//	BODY / HEADER
+* {
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  font-family: $Source_Sans;
+  font-weight: 200;
+  font-size: 1.1em;
+}
+
+header {
+  font-family: "Helvetica", "Arial", $Source_Sans;
+  font-weight: 100;
+  font-weight: 200;
+  color: $white;
+
+  &> .brand {
+    font-family: "Helvetica", "Arial", $Source_Sans; 
+    font-weight: 200;
+    font-size: 1.75em;
+    text-shadow: 1 1 1em rgba(0,0,0,0.2), -1 -1 1em rgba(0,0,0,0.2), 1 -1 1em rbga(0,0,0,0.2), -1 1 1em rgba(0,0,0,0.2);
+  }
+
+  & a {
+    color: $white;
+    text-decoration: none;
+    display: inline-block;
+    padding-left: 3em;
+    padding-right: 3em;
+    padding-top: 1em;
+    padding-bottom: 1em;
+    outline: 0;
+    transition: all 240ms ease-in-out;
+
+    vertical-align: middle;
+
+    font-size: 1.2em;
+
+    background-color: rgba(0, 0, 0,0.3);
+
+    &:hover {
+      animation: navButton 250ms ease-in-out;
+      animation-iteration-count: 1;
+      background-color: rgba(255,255,255,0.76);
+      color: $black;
+    }
+    &:active {
+      background-color: rgba(255,255,255,0.6);
+    }
+  }
+}
+
+//	CONTENT (HOME)
+
+.content {
+
+  font-size: 1.5em;
+  font-weight: 300;
+
+  & > article {
+    text-align: center;
+    margin-left: 50%;
+    transform: translateX(-50%);
+    color: $white;
+    display: inline-block;
+    padding-left: 3em;
+    padding-right: 3em;
+    padding-top: 1em;
+    padding-bottom: 1em;
+    width: 80%;
+    outline: 0;
+    transition: all 240ms ease-in-out;
+
+    background-color: rgba(0, 0, 0, 0.3);
+
+    &:hover {
+      animation: navButton 250ms ease-in-out;
+      animation-iteration-count: 1;
+      background-color: rgba(255,255,255, 0.76);
+      color: $black;
+    }
+  }
+  & > #panel {
+
+    &-1 {
+
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+
+    }
+
+    &-2 {
+     
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+
+      & > p {
+        font-size: 1.625em;
+      }
+ 
+    }
+
+    &-3 {
+      & > h2 {
+        font-size: calc(1.5em * 1.618);  
+      }
+    
+    }
+
+    &-4 {
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+      
+    }
+
+  }
+}
+
+
+//	FOOTER
+
+footer {
+  color: $footer-default;
+
+  &.extended {
+    background-color: $brand-blue-deep;
+    color:$brand-blue-light;
+  }
+}
+
+// Phone changes
+@media only screen and (max-width: 760px) {
+
+  .content {
+    font-size: 1.3em;
+    & > article { width: 90%; }
+  }
+  .panel-1 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-2 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-3 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-4 > h2 {
+    font-size: calc(1.3em * 1.618);
+  }
+}

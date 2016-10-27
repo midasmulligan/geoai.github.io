@@ -1,0 +1,22 @@
+footer {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  align-content: center;
+  position:static; 
+
+  left: 0;
+  bottom: 0;
+
+  width: 100%;
+  height: 200px;
+ 
+  background-color: lighten($black, 10%);
+ 
+}
+
+// Phone
+
+@media only screen and (max-widht: 760px) {
+  footer { display: none; }
+}
