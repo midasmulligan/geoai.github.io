@@ -22,7 +22,7 @@ paths = {
 gulp.task('sass', function() {
   pump([
     gulp.src(paths.sass),
-    sass().on('error', sass.logError),
+    sass({outputStyle: 'compressed'}).on('error', sass.logError),
     smap.write(),
     pref(),
     gulp.dest(paths.buildStyles)
