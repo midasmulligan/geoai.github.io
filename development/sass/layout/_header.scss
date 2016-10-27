@@ -1,5 +1,7 @@
 header {
 
+
+
   position: fixed;
   z-index: 9000;
 
@@ -26,7 +28,7 @@ header {
 
 
 }
-
+.menu { display: none; }
 // Full-frame panel
 
 .panel {
@@ -46,5 +48,67 @@ header {
 canvas {
 
   background-color: $black;
+
+}
+
+
+// Phone Changes
+
+@media only screen and (max-width: 760px) {
+  body { overflow: hidden } 
+  .off { transform: rotateY( 90deg ); }
+
+  header {
+    
+    & > .menu {
+      position: absolute;
+      top: 0;
+      right: 0;
+      display: flex;
+      justify-content: center;
+      align-content: center;
+      align-items: center;
+
+      & > .icon {
+        position: relative;
+        display: inline-block;
+        width: 1.625em;
+        height: 1.625em;
+        color: $white;
+        font-size: 1.5em;
+      }
+      
+    }
+    & > .brand {
+      margin-left: 50%;
+      transform: translateX(-50%);
+      float: none;
+      width: 10em;
+    }
+    & > nav {
+      position: absolute;
+      left: 0;
+      top: -1.5em; 
+      width: 100vw;
+      height: 105vh;
+      background-color: rgba(0,0,0,0.6);
+      transition: all 200ms ease-in-out;
+      &:last-of-type {
+        margin-right: 0;
+      }
+      font-size: 2em;
+      display: flex;
+      justify-content: center;
+      align-content: center;
+      align-items: center;
+      flex-direction: column;
+      transform: rotateY(0); 
+    }
+  
+  }
+
+  .content {
+    top: 5em !important;
+  }
 
 }

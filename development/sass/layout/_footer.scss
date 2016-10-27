@@ -1,5 +1,8 @@
 footer {
-  display: block;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  align-content: center;
   position:static; 
 
   left: 0;
@@ -10,4 +13,10 @@ footer {
  
   background-color: lighten($black, 10%);
  
+}
+
+// Phone
+
+@media only screen and (max-widht: 760px) {
+  footer { display: none; }
 }

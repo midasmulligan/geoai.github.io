@@ -61,19 +61,20 @@ header {
 
 .content {
 
-  font-size: 1.4em;
+  font-size: 1.5em;
+  font-weight: 300;
 
   & > article {
     text-align: center;
-    margin-left: 10%;
-    margin-right: 10%;
-
+    margin-left: 50%;
+    transform: translateX(-50%);
     color: $white;
     display: inline-block;
     padding-left: 3em;
     padding-right: 3em;
     padding-top: 1em;
     padding-bottom: 1em;
+    width: 80%;
     outline: 0;
     transition: all 240ms ease-in-out;
 
@@ -108,6 +109,20 @@ header {
  
     }
 
+    &-3 {
+      & > h2 {
+        font-size: calc(1.5em * 1.618);  
+      }
+    
+    }
+
+    &-4 {
+      & > h2 {
+        font-size: calc(1.5em * 1.618);
+      }
+      
+    }
+
   }
 }
 
@@ -120,5 +135,20 @@ footer {
   &.extended {
     background-color: $brand-blue-deep;
     color:$brand-blue-light;
+  }
+}
+
+// Phone changes
+@media only screen and (max-width: 760px) {
+
+  .content {
+    font-size: 1.3em;
+    & > article { width: 90%; }
+  }
+  .panel-1 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-2 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-3 > h2 {font-size: calc(1.3em * 1.618); }
+  .panel-4 > h2 {
+    font-size: calc(1.3em * 1.618);
   }
 }

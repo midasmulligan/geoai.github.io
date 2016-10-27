@@ -1,5 +1,4 @@
 // APP
-
 /**
  * Background Interactivity
  *  A cluster of interconnected nodes vaguely resembling a neural network.
@@ -155,7 +154,8 @@ var navHandler = (function () {
 	    panInfo = document.getElementById('panel-2'),
 	    panSolu = document.getElementById('panel-3'),
 	    panCont = document.getElementById('panel-4');
-
+	var menIcon = document.getElementById('menIcon'),
+	    navMenu = document.getElementById('navMenu');
 
 	var setActive = (function (el) {
 		
@@ -170,15 +170,22 @@ var navHandler = (function () {
 
 	navHome.onclick = function() {
 		 setActive(panHome);
+		 navMenu.classList.toggle('off');
 	};
 	navInfo.onclick = function() {
 		setActive(panInfo);
+		navMenu.classList.toggle('off');
 	};
 	navSolu.onclick = function() {
 		setActive(panSolu);
+		navMenu.classList.toggle('off');
 	};
 	navCont.onclick = function() {
 		setActive(panCont);
+		navMenu.classList.toggle('off');
+	};
+        menIcon.onclick = function() {
+		navMenu.classList.toggle('off');
 	};
 console.log('Navigation handler loaded.')
 });
