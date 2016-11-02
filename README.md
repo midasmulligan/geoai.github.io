@@ -14,3 +14,7 @@ Splash Page for QGS
 5. Run `npm install -g gulp` to install the Gulp CLI globally
 
 6. Run `npm start` in order to start the local dev server. It should boot BrowserSync, which will hot reload the browser with the latest changes whenever you make changes to the HTML, SCSS, CSS, and JS files. This is cool as heck, just so you know.
+
+---
+
+_Archived Nov 1/16_
