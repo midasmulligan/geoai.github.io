@@ -1,6 +1,18 @@
 #QGS Landing - Static
 
-_November 1, 2016_
+_April 18, 2017_
 
-##### Summary
-This is the contents of the `build/` directory mentioned in the development branch. This site is, in spite of it's function, compeltely static. So to run it simply open `index.html` in your preferred browser. Firefox or Chrome recommended, but works in all modern browsers.
+# Summary
+##Features
+- Foundation
+- Browsersync
+- Gulp-Sass
+- Hot Reloading
+
+##Usage
+
+Install: `npm install`
+
+Run Dev Server: `gulp`
+
+Running `gulp` should automatically boot up a browser window and load the site.
