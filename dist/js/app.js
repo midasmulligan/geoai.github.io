@@ -1,4 +1,3323 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+module.exports = require('./lib/axios');
+},{"./lib/axios":3}],2:[function(require,module,exports){
+(function (process){
+'use strict';
+
+var utils = require('./../utils');
+var settle = require('./../core/settle');
+var buildURL = require('./../helpers/buildURL');
+var parseHeaders = require('./../helpers/parseHeaders');
+var isURLSameOrigin = require('./../helpers/isURLSameOrigin');
+var createError = require('../core/createError');
+var btoa = (typeof window !== 'undefined' && window.btoa && window.btoa.bind(window)) || require('./../helpers/btoa');
+
+module.exports = function xhrAdapter(config) {
+  return new Promise(function dispatchXhrRequest(resolve, reject) {
+    var requestData = config.data;
+    var requestHeaders = config.headers;
+
+    if (utils.isFormData(requestData)) {
+      delete requestHeaders['Content-Type']; // Let the browser set it
+    }
+
+    var request = new XMLHttpRequest();
+    var loadEvent = 'onreadystatechange';
+    var xDomain = false;
+
+    // For IE 8/9 CORS support
+    // Only supports POST and GET calls and doesn't returns the response headers.
+    // DON'T do this for testing b/c XMLHttpRequest is mocked, not XDomainRequest.
+    if (process.env.NODE_ENV !== 'test' &&
+        typeof window !== 'undefined' &&
+        window.XDomainRequest && !('withCredentials' in request) &&
+        !isURLSameOrigin(config.url)) {
+      request = new window.XDomainRequest();
+      loadEvent = 'onload';
+      xDomain = true;
+      request.onprogress = function handleProgress() {};
+      request.ontimeout = function handleTimeout() {};
+    }
+
+    // HTTP basic authentication
+    if (config.auth) {
+      var username = config.auth.username || '';
+      var password = config.auth.password || '';
+      requestHeaders.Authorization = 'Basic ' + btoa(username + ':' + password);
+    }
+
+    request.open(config.method.toUpperCase(), buildURL(config.url, config.params, config.paramsSerializer), true);
+
+    // Set the request timeout in MS
+    request.timeout = config.timeout;
+
+    // Listen for ready state
+    request[loadEvent] = function handleLoad() {
+      if (!request || (request.readyState !== 4 && !xDomain)) {
+        return;
+      }
+
+      // The request errored out and we didn't get a response, this will be
+      // handled by onerror instead
+      // With one exception: request that using file: protocol, most browsers
+      // will return status as 0 even though it's a successful request
+      if (request.status === 0 && !(request.responseURL && request.responseURL.indexOf('file:') === 0)) {
+        return;
+      }
+
+      // Prepare the response
+      var responseHeaders = 'getAllResponseHeaders' in request ? parseHeaders(request.getAllResponseHeaders()) : null;
+      var responseData = !config.responseType || config.responseType === 'text' ? request.responseText : request.response;
+      var response = {
+        data: responseData,
+        // IE sends 1223 instead of 204 (https://github.com/mzabriskie/axios/issues/201)
+        status: request.status === 1223 ? 204 : request.status,
+        statusText: request.status === 1223 ? 'No Content' : request.statusText,
+        headers: responseHeaders,
+        config: config,
+        request: request
+      };
+
+      settle(resolve, reject, response);
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle low level network errors
+    request.onerror = function handleError() {
+      // Real errors are hidden from us by the browser
+      // onerror should only fire if it's a network error
+      reject(createError('Network Error', config));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Handle timeout
+    request.ontimeout = function handleTimeout() {
+      reject(createError('timeout of ' + config.timeout + 'ms exceeded', config, 'ECONNABORTED'));
+
+      // Clean up request
+      request = null;
+    };
+
+    // Add xsrf header
+    // This is only done if running in a standard browser environment.
+    // Specifically not if we're in a web worker, or react-native.
+    if (utils.isStandardBrowserEnv()) {
+      var cookies = require('./../helpers/cookies');
+
+      // Add xsrf header
+      var xsrfValue = (config.withCredentials || isURLSameOrigin(config.url)) && config.xsrfCookieName ?
+          cookies.read(config.xsrfCookieName) :
+          undefined;
+
+      if (xsrfValue) {
+        requestHeaders[config.xsrfHeaderName] = xsrfValue;
+      }
+    }
+
+    // Add headers to the request
+    if ('setRequestHeader' in request) {
+      utils.forEach(requestHeaders, function setRequestHeader(val, key) {
+        if (typeof requestData === 'undefined' && key.toLowerCase() === 'content-type') {
+          // Remove Content-Type if data is undefined
+          delete requestHeaders[key];
+        } else {
+          // Otherwise add header to the request
+          request.setRequestHeader(key, val);
+        }
+      });
+    }
+
+    // Add withCredentials to request if needed
+    if (config.withCredentials) {
+      request.withCredentials = true;
+    }
+
+    // Add responseType to request if needed
+    if (config.responseType) {
+      try {
+        request.responseType = config.responseType;
+      } catch (e) {
+        // Expected DOMException thrown by browsers not compatible XMLHttpRequest Level 2.
+        // But, this can be suppressed for 'json' type as it can be parsed by default 'transformResponse' function.
+        if (config.responseType !== 'json') {
+          throw e;
+        }
+      }
+    }
+
+    // Handle progress if needed
+    if (typeof config.onDownloadProgress === 'function') {
+      request.addEventListener('progress', config.onDownloadProgress);
+    }
+
+    // Not all browsers support upload events
+    if (typeof config.onUploadProgress === 'function' && request.upload) {
+      request.upload.addEventListener('progress', config.onUploadProgress);
+    }
+
+    if (config.cancelToken) {
+      // Handle cancellation
+      config.cancelToken.promise.then(function onCanceled(cancel) {
+        if (!request) {
+          return;
+        }
+
+        request.abort();
+        reject(cancel);
+        // Clean up request
+        request = null;
+      });
+    }
+
+    if (requestData === undefined) {
+      requestData = null;
+    }
+
+    // Send the request
+    request.send(requestData);
+  });
+};
+
+}).call(this,require('_process'))
+},{"../core/createError":9,"./../core/settle":12,"./../helpers/btoa":16,"./../helpers/buildURL":17,"./../helpers/cookies":19,"./../helpers/isURLSameOrigin":21,"./../helpers/parseHeaders":23,"./../utils":25,"_process":30}],3:[function(require,module,exports){
+'use strict';
+
+var utils = require('./utils');
+var bind = require('./helpers/bind');
+var Axios = require('./core/Axios');
+var defaults = require('./defaults');
+
+/**
+ * Create an instance of Axios
+ *
+ * @param {Object} defaultConfig The default config for the instance
+ * @return {Axios} A new instance of Axios
+ */
+function createInstance(defaultConfig) {
+  var context = new Axios(defaultConfig);
+  var instance = bind(Axios.prototype.request, context);
+
+  // Copy axios.prototype to instance
+  utils.extend(instance, Axios.prototype, context);
+
+  // Copy context to instance
+  utils.extend(instance, context);
+
+  return instance;
+}
+
+// Create the default instance to be exported
+var axios = createInstance(defaults);
+
+// Expose Axios class to allow class inheritance
+axios.Axios = Axios;
+
+// Factory for creating new instances
+axios.create = function create(instanceConfig) {
+  return createInstance(utils.merge(defaults, instanceConfig));
+};
+
+// Expose Cancel & CancelToken
+axios.Cancel = require('./cancel/Cancel');
+axios.CancelToken = require('./cancel/CancelToken');
+axios.isCancel = require('./cancel/isCancel');
+
+// Expose all/spread
+axios.all = function all(promises) {
+  return Promise.all(promises);
+};
+axios.spread = require('./helpers/spread');
+
+module.exports = axios;
+
+// Allow use of default import syntax in TypeScript
+module.exports.default = axios;
+
+},{"./cancel/Cancel":4,"./cancel/CancelToken":5,"./cancel/isCancel":6,"./core/Axios":7,"./defaults":14,"./helpers/bind":15,"./helpers/spread":24,"./utils":25}],4:[function(require,module,exports){
+'use strict';
+
+/**
+ * A `Cancel` is an object that is thrown when an operation is canceled.
+ *
+ * @class
+ * @param {string=} message The message.
+ */
+function Cancel(message) {
+  this.message = message;
+}
+
+Cancel.prototype.toString = function toString() {
+  return 'Cancel' + (this.message ? ': ' + this.message : '');
+};
+
+Cancel.prototype.__CANCEL__ = true;
+
+module.exports = Cancel;
+
+},{}],5:[function(require,module,exports){
+'use strict';
+
+var Cancel = require('./Cancel');
+
+/**
+ * A `CancelToken` is an object that can be used to request cancellation of an operation.
+ *
+ * @class
+ * @param {Function} executor The executor function.
+ */
+function CancelToken(executor) {
+  if (typeof executor !== 'function') {
+    throw new TypeError('executor must be a function.');
+  }
+
+  var resolvePromise;
+  this.promise = new Promise(function promiseExecutor(resolve) {
+    resolvePromise = resolve;
+  });
+
+  var token = this;
+  executor(function cancel(message) {
+    if (token.reason) {
+      // Cancellation has already been requested
+      return;
+    }
+
+    token.reason = new Cancel(message);
+    resolvePromise(token.reason);
+  });
+}
+
+/**
+ * Throws a `Cancel` if cancellation has been requested.
+ */
+CancelToken.prototype.throwIfRequested = function throwIfRequested() {
+  if (this.reason) {
+    throw this.reason;
+  }
+};
+
+/**
+ * Returns an object that contains a new `CancelToken` and a function that, when called,
+ * cancels the `CancelToken`.
+ */
+CancelToken.source = function source() {
+  var cancel;
+  var token = new CancelToken(function executor(c) {
+    cancel = c;
+  });
+  return {
+    token: token,
+    cancel: cancel
+  };
+};
+
+module.exports = CancelToken;
+
+},{"./Cancel":4}],6:[function(require,module,exports){
+'use strict';
+
+module.exports = function isCancel(value) {
+  return !!(value && value.__CANCEL__);
+};
+
+},{}],7:[function(require,module,exports){
+'use strict';
+
+var defaults = require('./../defaults');
+var utils = require('./../utils');
+var InterceptorManager = require('./InterceptorManager');
+var dispatchRequest = require('./dispatchRequest');
+var isAbsoluteURL = require('./../helpers/isAbsoluteURL');
+var combineURLs = require('./../helpers/combineURLs');
+
+/**
+ * Create a new instance of Axios
+ *
+ * @param {Object} instanceConfig The default config for the instance
+ */
+function Axios(instanceConfig) {
+  this.defaults = instanceConfig;
+  this.interceptors = {
+    request: new InterceptorManager(),
+    response: new InterceptorManager()
+  };
+}
+
+/**
+ * Dispatch a request
+ *
+ * @param {Object} config The config specific for this request (merged with this.defaults)
+ */
+Axios.prototype.request = function request(config) {
+  /*eslint no-param-reassign:0*/
+  // Allow for axios('example/url'[, config]) a la fetch API
+  if (typeof config === 'string') {
+    config = utils.merge({
+      url: arguments[0]
+    }, arguments[1]);
+  }
+
+  config = utils.merge(defaults, this.defaults, { method: 'get' }, config);
+
+  // Support baseURL config
+  if (config.baseURL && !isAbsoluteURL(config.url)) {
+    config.url = combineURLs(config.baseURL, config.url);
+  }
+
+  // Hook up interceptors middleware
+  var chain = [dispatchRequest, undefined];
+  var promise = Promise.resolve(config);
+
+  this.interceptors.request.forEach(function unshiftRequestInterceptors(interceptor) {
+    chain.unshift(interceptor.fulfilled, interceptor.rejected);
+  });
+
+  this.interceptors.response.forEach(function pushResponseInterceptors(interceptor) {
+    chain.push(interceptor.fulfilled, interceptor.rejected);
+  });
+
+  while (chain.length) {
+    promise = promise.then(chain.shift(), chain.shift());
+  }
+
+  return promise;
+};
+
+// Provide aliases for supported request methods
+utils.forEach(['delete', 'get', 'head', 'options'], function forEachMethodNoData(method) {
+  /*eslint func-names:0*/
+  Axios.prototype[method] = function(url, config) {
+    return this.request(utils.merge(config || {}, {
+      method: method,
+      url: url
+    }));
+  };
+});
+
+utils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
+  /*eslint func-names:0*/
+  Axios.prototype[method] = function(url, data, config) {
+    return this.request(utils.merge(config || {}, {
+      method: method,
+      url: url,
+      data: data
+    }));
+  };
+});
+
+module.exports = Axios;
+
+},{"./../defaults":14,"./../helpers/combineURLs":18,"./../helpers/isAbsoluteURL":20,"./../utils":25,"./InterceptorManager":8,"./dispatchRequest":10}],8:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+function InterceptorManager() {
+  this.handlers = [];
+}
+
+/**
+ * Add a new interceptor to the stack
+ *
+ * @param {Function} fulfilled The function to handle `then` for a `Promise`
+ * @param {Function} rejected The function to handle `reject` for a `Promise`
+ *
+ * @return {Number} An ID used to remove interceptor later
+ */
+InterceptorManager.prototype.use = function use(fulfilled, rejected) {
+  this.handlers.push({
+    fulfilled: fulfilled,
+    rejected: rejected
+  });
+  return this.handlers.length - 1;
+};
+
+/**
+ * Remove an interceptor from the stack
+ *
+ * @param {Number} id The ID that was returned by `use`
+ */
+InterceptorManager.prototype.eject = function eject(id) {
+  if (this.handlers[id]) {
+    this.handlers[id] = null;
+  }
+};
+
+/**
+ * Iterate over all the registered interceptors
+ *
+ * This method is particularly useful for skipping over any
+ * interceptors that may have become `null` calling `eject`.
+ *
+ * @param {Function} fn The function to call for each interceptor
+ */
+InterceptorManager.prototype.forEach = function forEach(fn) {
+  utils.forEach(this.handlers, function forEachHandler(h) {
+    if (h !== null) {
+      fn(h);
+    }
+  });
+};
+
+module.exports = InterceptorManager;
+
+},{"./../utils":25}],9:[function(require,module,exports){
+'use strict';
+
+var enhanceError = require('./enhanceError');
+
+/**
+ * Create an Error with the specified message, config, error code, and response.
+ *
+ * @param {string} message The error message.
+ * @param {Object} config The config.
+ * @param {string} [code] The error code (for example, 'ECONNABORTED').
+ @ @param {Object} [response] The response.
+ * @returns {Error} The created error.
+ */
+module.exports = function createError(message, config, code, response) {
+  var error = new Error(message);
+  return enhanceError(error, config, code, response);
+};
+
+},{"./enhanceError":11}],10:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+var transformData = require('./transformData');
+var isCancel = require('../cancel/isCancel');
+var defaults = require('../defaults');
+
+/**
+ * Throws a `Cancel` if cancellation has been requested.
+ */
+function throwIfCancellationRequested(config) {
+  if (config.cancelToken) {
+    config.cancelToken.throwIfRequested();
+  }
+}
+
+/**
+ * Dispatch a request to the server using the configured adapter.
+ *
+ * @param {object} config The config that is to be used for the request
+ * @returns {Promise} The Promise to be fulfilled
+ */
+module.exports = function dispatchRequest(config) {
+  throwIfCancellationRequested(config);
+
+  // Ensure headers exist
+  config.headers = config.headers || {};
+
+  // Transform request data
+  config.data = transformData(
+    config.data,
+    config.headers,
+    config.transformRequest
+  );
+
+  // Flatten headers
+  config.headers = utils.merge(
+    config.headers.common || {},
+    config.headers[config.method] || {},
+    config.headers || {}
+  );
+
+  utils.forEach(
+    ['delete', 'get', 'head', 'post', 'put', 'patch', 'common'],
+    function cleanHeaderConfig(method) {
+      delete config.headers[method];
+    }
+  );
+
+  var adapter = config.adapter || defaults.adapter;
+
+  return adapter(config).then(function onAdapterResolution(response) {
+    throwIfCancellationRequested(config);
+
+    // Transform response data
+    response.data = transformData(
+      response.data,
+      response.headers,
+      config.transformResponse
+    );
+
+    return response;
+  }, function onAdapterRejection(reason) {
+    if (!isCancel(reason)) {
+      throwIfCancellationRequested(config);
+
+      // Transform response data
+      if (reason && reason.response) {
+        reason.response.data = transformData(
+          reason.response.data,
+          reason.response.headers,
+          config.transformResponse
+        );
+      }
+    }
+
+    return Promise.reject(reason);
+  });
+};
+
+},{"../cancel/isCancel":6,"../defaults":14,"./../utils":25,"./transformData":13}],11:[function(require,module,exports){
+'use strict';
+
+/**
+ * Update an Error with the specified config, error code, and response.
+ *
+ * @param {Error} error The error to update.
+ * @param {Object} config The config.
+ * @param {string} [code] The error code (for example, 'ECONNABORTED').
+ @ @param {Object} [response] The response.
+ * @returns {Error} The error.
+ */
+module.exports = function enhanceError(error, config, code, response) {
+  error.config = config;
+  if (code) {
+    error.code = code;
+  }
+  error.response = response;
+  return error;
+};
+
+},{}],12:[function(require,module,exports){
+'use strict';
+
+var createError = require('./createError');
+
+/**
+ * Resolve or reject a Promise based on response status.
+ *
+ * @param {Function} resolve A function that resolves the promise.
+ * @param {Function} reject A function that rejects the promise.
+ * @param {object} response The response.
+ */
+module.exports = function settle(resolve, reject, response) {
+  var validateStatus = response.config.validateStatus;
+  // Note: status is not exposed by XDomainRequest
+  if (!response.status || !validateStatus || validateStatus(response.status)) {
+    resolve(response);
+  } else {
+    reject(createError(
+      'Request failed with status code ' + response.status,
+      response.config,
+      null,
+      response
+    ));
+  }
+};
+
+},{"./createError":9}],13:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+/**
+ * Transform the data for a request or a response
+ *
+ * @param {Object|String} data The data to be transformed
+ * @param {Array} headers The headers for the request or response
+ * @param {Array|Function} fns A single function or Array of functions
+ * @returns {*} The resulting transformed data
+ */
+module.exports = function transformData(data, headers, fns) {
+  /*eslint no-param-reassign:0*/
+  utils.forEach(fns, function transform(fn) {
+    data = fn(data, headers);
+  });
+
+  return data;
+};
+
+},{"./../utils":25}],14:[function(require,module,exports){
+(function (process){
+'use strict';
+
+var utils = require('./utils');
+var normalizeHeaderName = require('./helpers/normalizeHeaderName');
+
+var DEFAULT_CONTENT_TYPE = {
+  'Content-Type': 'application/x-www-form-urlencoded'
+};
+
+function setContentTypeIfUnset(headers, value) {
+  if (!utils.isUndefined(headers) && utils.isUndefined(headers['Content-Type'])) {
+    headers['Content-Type'] = value;
+  }
+}
+
+function getDefaultAdapter() {
+  var adapter;
+  if (typeof XMLHttpRequest !== 'undefined') {
+    // For browsers use XHR adapter
+    adapter = require('./adapters/xhr');
+  } else if (typeof process !== 'undefined') {
+    // For node use HTTP adapter
+    adapter = require('./adapters/http');
+  }
+  return adapter;
+}
+
+var defaults = {
+  adapter: getDefaultAdapter(),
+
+  transformRequest: [function transformRequest(data, headers) {
+    normalizeHeaderName(headers, 'Content-Type');
+    if (utils.isFormData(data) ||
+      utils.isArrayBuffer(data) ||
+      utils.isBuffer(data) ||
+      utils.isStream(data) ||
+      utils.isFile(data) ||
+      utils.isBlob(data)
+    ) {
+      return data;
+    }
+    if (utils.isArrayBufferView(data)) {
+      return data.buffer;
+    }
+    if (utils.isURLSearchParams(data)) {
+      setContentTypeIfUnset(headers, 'application/x-www-form-urlencoded;charset=utf-8');
+      return data.toString();
+    }
+    if (utils.isObject(data)) {
+      setContentTypeIfUnset(headers, 'application/json;charset=utf-8');
+      return JSON.stringify(data);
+    }
+    return data;
+  }],
+
+  transformResponse: [function transformResponse(data) {
+    /*eslint no-param-reassign:0*/
+    if (typeof data === 'string') {
+      try {
+        data = JSON.parse(data);
+      } catch (e) { /* Ignore */ }
+    }
+    return data;
+  }],
+
+  timeout: 0,
+
+  xsrfCookieName: 'XSRF-TOKEN',
+  xsrfHeaderName: 'X-XSRF-TOKEN',
+
+  maxContentLength: -1,
+
+  validateStatus: function validateStatus(status) {
+    return status >= 200 && status < 300;
+  }
+};
+
+defaults.headers = {
+  common: {
+    'Accept': 'application/json, text/plain, */*'
+  }
+};
+
+utils.forEach(['delete', 'get', 'head'], function forEachMethodNoData(method) {
+  defaults.headers[method] = {};
+});
+
+utils.forEach(['post', 'put', 'patch'], function forEachMethodWithData(method) {
+  defaults.headers[method] = utils.merge(DEFAULT_CONTENT_TYPE);
+});
+
+module.exports = defaults;
+
+}).call(this,require('_process'))
+},{"./adapters/http":2,"./adapters/xhr":2,"./helpers/normalizeHeaderName":22,"./utils":25,"_process":30}],15:[function(require,module,exports){
+'use strict';
+
+module.exports = function bind(fn, thisArg) {
+  return function wrap() {
+    var args = new Array(arguments.length);
+    for (var i = 0; i < args.length; i++) {
+      args[i] = arguments[i];
+    }
+    return fn.apply(thisArg, args);
+  };
+};
+
+},{}],16:[function(require,module,exports){
+'use strict';
+
+// btoa polyfill for IE<10 courtesy https://github.com/davidchambers/Base64.js
+
+var chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=';
+
+function E() {
+  this.message = 'String contains an invalid character';
+}
+E.prototype = new Error;
+E.prototype.code = 5;
+E.prototype.name = 'InvalidCharacterError';
+
+function btoa(input) {
+  var str = String(input);
+  var output = '';
+  for (
+    // initialize result and counter
+    var block, charCode, idx = 0, map = chars;
+    // if the next str index does not exist:
+    //   change the mapping table to "="
+    //   check if d has no fractional digits
+    str.charAt(idx | 0) || (map = '=', idx % 1);
+    // "8 - idx % 1 * 8" generates the sequence 2, 4, 6, 8
+    output += map.charAt(63 & block >> 8 - idx % 1 * 8)
+  ) {
+    charCode = str.charCodeAt(idx += 3 / 4);
+    if (charCode > 0xFF) {
+      throw new E();
+    }
+    block = block << 8 | charCode;
+  }
+  return output;
+}
+
+module.exports = btoa;
+
+},{}],17:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+function encode(val) {
+  return encodeURIComponent(val).
+    replace(/%40/gi, '@').
+    replace(/%3A/gi, ':').
+    replace(/%24/g, '$').
+    replace(/%2C/gi, ',').
+    replace(/%20/g, '+').
+    replace(/%5B/gi, '[').
+    replace(/%5D/gi, ']');
+}
+
+/**
+ * Build a URL by appending params to the end
+ *
+ * @param {string} url The base of the url (e.g., http://www.google.com)
+ * @param {object} [params] The params to be appended
+ * @returns {string} The formatted url
+ */
+module.exports = function buildURL(url, params, paramsSerializer) {
+  /*eslint no-param-reassign:0*/
+  if (!params) {
+    return url;
+  }
+
+  var serializedParams;
+  if (paramsSerializer) {
+    serializedParams = paramsSerializer(params);
+  } else if (utils.isURLSearchParams(params)) {
+    serializedParams = params.toString();
+  } else {
+    var parts = [];
+
+    utils.forEach(params, function serialize(val, key) {
+      if (val === null || typeof val === 'undefined') {
+        return;
+      }
+
+      if (utils.isArray(val)) {
+        key = key + '[]';
+      }
+
+      if (!utils.isArray(val)) {
+        val = [val];
+      }
+
+      utils.forEach(val, function parseValue(v) {
+        if (utils.isDate(v)) {
+          v = v.toISOString();
+        } else if (utils.isObject(v)) {
+          v = JSON.stringify(v);
+        }
+        parts.push(encode(key) + '=' + encode(v));
+      });
+    });
+
+    serializedParams = parts.join('&');
+  }
+
+  if (serializedParams) {
+    url += (url.indexOf('?') === -1 ? '?' : '&') + serializedParams;
+  }
+
+  return url;
+};
+
+},{"./../utils":25}],18:[function(require,module,exports){
+'use strict';
+
+/**
+ * Creates a new URL by combining the specified URLs
+ *
+ * @param {string} baseURL The base URL
+ * @param {string} relativeURL The relative URL
+ * @returns {string} The combined URL
+ */
+module.exports = function combineURLs(baseURL, relativeURL) {
+  return relativeURL
+    ? baseURL.replace(/\/+$/, '') + '/' + relativeURL.replace(/^\/+/, '')
+    : baseURL;
+};
+
+},{}],19:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+module.exports = (
+  utils.isStandardBrowserEnv() ?
+
+  // Standard browser envs support document.cookie
+  (function standardBrowserEnv() {
+    return {
+      write: function write(name, value, expires, path, domain, secure) {
+        var cookie = [];
+        cookie.push(name + '=' + encodeURIComponent(value));
+
+        if (utils.isNumber(expires)) {
+          cookie.push('expires=' + new Date(expires).toGMTString());
+        }
+
+        if (utils.isString(path)) {
+          cookie.push('path=' + path);
+        }
+
+        if (utils.isString(domain)) {
+          cookie.push('domain=' + domain);
+        }
+
+        if (secure === true) {
+          cookie.push('secure');
+        }
+
+        document.cookie = cookie.join('; ');
+      },
+
+      read: function read(name) {
+        var match = document.cookie.match(new RegExp('(^|;\\s*)(' + name + ')=([^;]*)'));
+        return (match ? decodeURIComponent(match[3]) : null);
+      },
+
+      remove: function remove(name) {
+        this.write(name, '', Date.now() - 86400000);
+      }
+    };
+  })() :
+
+  // Non standard browser env (web workers, react-native) lack needed support.
+  (function nonStandardBrowserEnv() {
+    return {
+      write: function write() {},
+      read: function read() { return null; },
+      remove: function remove() {}
+    };
+  })()
+);
+
+},{"./../utils":25}],20:[function(require,module,exports){
+'use strict';
+
+/**
+ * Determines whether the specified URL is absolute
+ *
+ * @param {string} url The URL to test
+ * @returns {boolean} True if the specified URL is absolute, otherwise false
+ */
+module.exports = function isAbsoluteURL(url) {
+  // A URL is considered absolute if it begins with "<scheme>://" or "//" (protocol-relative URL).
+  // RFC 3986 defines scheme name as a sequence of characters beginning with a letter and followed
+  // by any combination of letters, digits, plus, period, or hyphen.
+  return /^([a-z][a-z\d\+\-\.]*:)?\/\//i.test(url);
+};
+
+},{}],21:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+module.exports = (
+  utils.isStandardBrowserEnv() ?
+
+  // Standard browser envs have full support of the APIs needed to test
+  // whether the request URL is of the same origin as current location.
+  (function standardBrowserEnv() {
+    var msie = /(msie|trident)/i.test(navigator.userAgent);
+    var urlParsingNode = document.createElement('a');
+    var originURL;
+
+    /**
+    * Parse a URL to discover it's components
+    *
+    * @param {String} url The URL to be parsed
+    * @returns {Object}
+    */
+    function resolveURL(url) {
+      var href = url;
+
+      if (msie) {
+        // IE needs attribute set twice to normalize properties
+        urlParsingNode.setAttribute('href', href);
+        href = urlParsingNode.href;
+      }
+
+      urlParsingNode.setAttribute('href', href);
+
+      // urlParsingNode provides the UrlUtils interface - http://url.spec.whatwg.org/#urlutils
+      return {
+        href: urlParsingNode.href,
+        protocol: urlParsingNode.protocol ? urlParsingNode.protocol.replace(/:$/, '') : '',
+        host: urlParsingNode.host,
+        search: urlParsingNode.search ? urlParsingNode.search.replace(/^\?/, '') : '',
+        hash: urlParsingNode.hash ? urlParsingNode.hash.replace(/^#/, '') : '',
+        hostname: urlParsingNode.hostname,
+        port: urlParsingNode.port,
+        pathname: (urlParsingNode.pathname.charAt(0) === '/') ?
+                  urlParsingNode.pathname :
+                  '/' + urlParsingNode.pathname
+      };
+    }
+
+    originURL = resolveURL(window.location.href);
+
+    /**
+    * Determine if a URL shares the same origin as the current location
+    *
+    * @param {String} requestURL The URL to test
+    * @returns {boolean} True if URL shares the same origin, otherwise false
+    */
+    return function isURLSameOrigin(requestURL) {
+      var parsed = (utils.isString(requestURL)) ? resolveURL(requestURL) : requestURL;
+      return (parsed.protocol === originURL.protocol &&
+            parsed.host === originURL.host);
+    };
+  })() :
+
+  // Non standard browser envs (web workers, react-native) lack needed support.
+  (function nonStandardBrowserEnv() {
+    return function isURLSameOrigin() {
+      return true;
+    };
+  })()
+);
+
+},{"./../utils":25}],22:[function(require,module,exports){
+'use strict';
+
+var utils = require('../utils');
+
+module.exports = function normalizeHeaderName(headers, normalizedName) {
+  utils.forEach(headers, function processHeader(value, name) {
+    if (name !== normalizedName && name.toUpperCase() === normalizedName.toUpperCase()) {
+      headers[normalizedName] = value;
+      delete headers[name];
+    }
+  });
+};
+
+},{"../utils":25}],23:[function(require,module,exports){
+'use strict';
+
+var utils = require('./../utils');
+
+/**
+ * Parse headers into an object
+ *
+ * ```
+ * Date: Wed, 27 Aug 2014 08:58:49 GMT
+ * Content-Type: application/json
+ * Connection: keep-alive
+ * Transfer-Encoding: chunked
+ * ```
+ *
+ * @param {String} headers Headers needing to be parsed
+ * @returns {Object} Headers parsed into an object
+ */
+module.exports = function parseHeaders(headers) {
+  var parsed = {};
+  var key;
+  var val;
+  var i;
+
+  if (!headers) { return parsed; }
+
+  utils.forEach(headers.split('\n'), function parser(line) {
+    i = line.indexOf(':');
+    key = utils.trim(line.substr(0, i)).toLowerCase();
+    val = utils.trim(line.substr(i + 1));
+
+    if (key) {
+      parsed[key] = parsed[key] ? parsed[key] + ', ' + val : val;
+    }
+  });
+
+  return parsed;
+};
+
+},{"./../utils":25}],24:[function(require,module,exports){
+'use strict';
+
+/**
+ * Syntactic sugar for invoking a function and expanding an array for arguments.
+ *
+ * Common use case would be to use `Function.prototype.apply`.
+ *
+ *  ```js
+ *  function f(x, y, z) {}
+ *  var args = [1, 2, 3];
+ *  f.apply(null, args);
+ *  ```
+ *
+ * With `spread` this example can be re-written.
+ *
+ *  ```js
+ *  spread(function(x, y, z) {})([1, 2, 3]);
+ *  ```
+ *
+ * @param {Function} callback
+ * @returns {Function}
+ */
+module.exports = function spread(callback) {
+  return function wrap(arr) {
+    return callback.apply(null, arr);
+  };
+};
+
+},{}],25:[function(require,module,exports){
+(function (Buffer){
+'use strict';
+
+var bind = require('./helpers/bind');
+
+/*global toString:true*/
+
+// utils is a library of generic helper functions non-specific to axios
+
+var toString = Object.prototype.toString;
+
+/**
+ * Determine if a value is an Array
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is an Array, otherwise false
+ */
+function isArray(val) {
+  return toString.call(val) === '[object Array]';
+}
+
+/**
+ * Determine if a value is a Node Buffer
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Node Buffer, otherwise false
+ */
+function isBuffer(val) {
+  return ((typeof Buffer !== 'undefined') && (Buffer.isBuffer) && (Buffer.isBuffer(val)));
+}
+
+/**
+ * Determine if a value is an ArrayBuffer
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is an ArrayBuffer, otherwise false
+ */
+function isArrayBuffer(val) {
+  return toString.call(val) === '[object ArrayBuffer]';
+}
+
+/**
+ * Determine if a value is a FormData
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is an FormData, otherwise false
+ */
+function isFormData(val) {
+  return (typeof FormData !== 'undefined') && (val instanceof FormData);
+}
+
+/**
+ * Determine if a value is a view on an ArrayBuffer
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a view on an ArrayBuffer, otherwise false
+ */
+function isArrayBufferView(val) {
+  var result;
+  if ((typeof ArrayBuffer !== 'undefined') && (ArrayBuffer.isView)) {
+    result = ArrayBuffer.isView(val);
+  } else {
+    result = (val) && (val.buffer) && (val.buffer instanceof ArrayBuffer);
+  }
+  return result;
+}
+
+/**
+ * Determine if a value is a String
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a String, otherwise false
+ */
+function isString(val) {
+  return typeof val === 'string';
+}
+
+/**
+ * Determine if a value is a Number
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Number, otherwise false
+ */
+function isNumber(val) {
+  return typeof val === 'number';
+}
+
+/**
+ * Determine if a value is undefined
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if the value is undefined, otherwise false
+ */
+function isUndefined(val) {
+  return typeof val === 'undefined';
+}
+
+/**
+ * Determine if a value is an Object
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is an Object, otherwise false
+ */
+function isObject(val) {
+  return val !== null && typeof val === 'object';
+}
+
+/**
+ * Determine if a value is a Date
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Date, otherwise false
+ */
+function isDate(val) {
+  return toString.call(val) === '[object Date]';
+}
+
+/**
+ * Determine if a value is a File
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a File, otherwise false
+ */
+function isFile(val) {
+  return toString.call(val) === '[object File]';
+}
+
+/**
+ * Determine if a value is a Blob
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Blob, otherwise false
+ */
+function isBlob(val) {
+  return toString.call(val) === '[object Blob]';
+}
+
+/**
+ * Determine if a value is a Function
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Function, otherwise false
+ */
+function isFunction(val) {
+  return toString.call(val) === '[object Function]';
+}
+
+/**
+ * Determine if a value is a Stream
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a Stream, otherwise false
+ */
+function isStream(val) {
+  return isObject(val) && isFunction(val.pipe);
+}
+
+/**
+ * Determine if a value is a URLSearchParams object
+ *
+ * @param {Object} val The value to test
+ * @returns {boolean} True if value is a URLSearchParams object, otherwise false
+ */
+function isURLSearchParams(val) {
+  return typeof URLSearchParams !== 'undefined' && val instanceof URLSearchParams;
+}
+
+/**
+ * Trim excess whitespace off the beginning and end of a string
+ *
+ * @param {String} str The String to trim
+ * @returns {String} The String freed of excess whitespace
+ */
+function trim(str) {
+  return str.replace(/^\s*/, '').replace(/\s*$/, '');
+}
+
+/**
+ * Determine if we're running in a standard browser environment
+ *
+ * This allows axios to run in a web worker, and react-native.
+ * Both environments support XMLHttpRequest, but not fully standard globals.
+ *
+ * web workers:
+ *  typeof window -> undefined
+ *  typeof document -> undefined
+ *
+ * react-native:
+ *  navigator.product -> 'ReactNative'
+ */
+function isStandardBrowserEnv() {
+  if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
+    return false;
+  }
+  return (
+    typeof window !== 'undefined' &&
+    typeof document !== 'undefined'
+  );
+}
+
+/**
+ * Iterate over an Array or an Object invoking a function for each item.
+ *
+ * If `obj` is an Array callback will be called passing
+ * the value, index, and complete array for each item.
+ *
+ * If 'obj' is an Object callback will be called passing
+ * the value, key, and complete object for each property.
+ *
+ * @param {Object|Array} obj The object to iterate
+ * @param {Function} fn The callback to invoke for each item
+ */
+function forEach(obj, fn) {
+  // Don't bother if no value provided
+  if (obj === null || typeof obj === 'undefined') {
+    return;
+  }
+
+  // Force an array if not already something iterable
+  if (typeof obj !== 'object' && !isArray(obj)) {
+    /*eslint no-param-reassign:0*/
+    obj = [obj];
+  }
+
+  if (isArray(obj)) {
+    // Iterate over array values
+    for (var i = 0, l = obj.length; i < l; i++) {
+      fn.call(null, obj[i], i, obj);
+    }
+  } else {
+    // Iterate over object keys
+    for (var key in obj) {
+      if (Object.prototype.hasOwnProperty.call(obj, key)) {
+        fn.call(null, obj[key], key, obj);
+      }
+    }
+  }
+}
+
+/**
+ * Accepts varargs expecting each argument to be an object, then
+ * immutably merges the properties of each object and returns result.
+ *
+ * When multiple objects contain the same key the later object in
+ * the arguments list will take precedence.
+ *
+ * Example:
+ *
+ * ```js
+ * var result = merge({foo: 123}, {foo: 456});
+ * console.log(result.foo); // outputs 456
+ * ```
+ *
+ * @param {Object} obj1 Object to merge
+ * @returns {Object} Result of all merge properties
+ */
+function merge(/* obj1, obj2, obj3, ... */) {
+  var result = {};
+  function assignValue(val, key) {
+    if (typeof result[key] === 'object' && typeof val === 'object') {
+      result[key] = merge(result[key], val);
+    } else {
+      result[key] = val;
+    }
+  }
+
+  for (var i = 0, l = arguments.length; i < l; i++) {
+    forEach(arguments[i], assignValue);
+  }
+  return result;
+}
+
+/**
+ * Extends object a by mutably adding to it the properties of object b.
+ *
+ * @param {Object} a The object to be extended
+ * @param {Object} b The object to copy properties from
+ * @param {Object} thisArg The object to bind function to
+ * @return {Object} The resulting value of object a
+ */
+function extend(a, b, thisArg) {
+  forEach(b, function assignValue(val, key) {
+    if (thisArg && typeof val === 'function') {
+      a[key] = bind(val, thisArg);
+    } else {
+      a[key] = val;
+    }
+  });
+  return a;
+}
+
+module.exports = {
+  isArray: isArray,
+  isArrayBuffer: isArrayBuffer,
+  isBuffer: isBuffer,
+  isFormData: isFormData,
+  isArrayBufferView: isArrayBufferView,
+  isString: isString,
+  isNumber: isNumber,
+  isObject: isObject,
+  isUndefined: isUndefined,
+  isDate: isDate,
+  isFile: isFile,
+  isBlob: isBlob,
+  isFunction: isFunction,
+  isStream: isStream,
+  isURLSearchParams: isURLSearchParams,
+  isStandardBrowserEnv: isStandardBrowserEnv,
+  forEach: forEach,
+  merge: merge,
+  extend: extend,
+  trim: trim
+};
+
+}).call(this,require("buffer").Buffer)
+},{"./helpers/bind":15,"buffer":27}],26:[function(require,module,exports){
+'use strict'
+
+exports.byteLength = byteLength
+exports.toByteArray = toByteArray
+exports.fromByteArray = fromByteArray
+
+var lookup = []
+var revLookup = []
+var Arr = typeof Uint8Array !== 'undefined' ? Uint8Array : Array
+
+var code = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+for (var i = 0, len = code.length; i < len; ++i) {
+  lookup[i] = code[i]
+  revLookup[code.charCodeAt(i)] = i
+}
+
+revLookup['-'.charCodeAt(0)] = 62
+revLookup['_'.charCodeAt(0)] = 63
+
+function placeHoldersCount (b64) {
+  var len = b64.length
+  if (len % 4 > 0) {
+    throw new Error('Invalid string. Length must be a multiple of 4')
+  }
+
+  // the number of equal signs (place holders)
+  // if there are two placeholders, than the two characters before it
+  // represent one byte
+  // if there is only one, then the three characters before it represent 2 bytes
+  // this is just a cheap hack to not do indexOf twice
+  return b64[len - 2] === '=' ? 2 : b64[len - 1] === '=' ? 1 : 0
+}
+
+function byteLength (b64) {
+  // base64 is 4/3 + up to two characters of the original data
+  return b64.length * 3 / 4 - placeHoldersCount(b64)
+}
+
+function toByteArray (b64) {
+  var i, j, l, tmp, placeHolders, arr
+  var len = b64.length
+  placeHolders = placeHoldersCount(b64)
+
+  arr = new Arr(len * 3 / 4 - placeHolders)
+
+  // if there are placeholders, only get up to the last complete 4 chars
+  l = placeHolders > 0 ? len - 4 : len
+
+  var L = 0
+
+  for (i = 0, j = 0; i < l; i += 4, j += 3) {
+    tmp = (revLookup[b64.charCodeAt(i)] << 18) | (revLookup[b64.charCodeAt(i + 1)] << 12) | (revLookup[b64.charCodeAt(i + 2)] << 6) | revLookup[b64.charCodeAt(i + 3)]
+    arr[L++] = (tmp >> 16) & 0xFF
+    arr[L++] = (tmp >> 8) & 0xFF
+    arr[L++] = tmp & 0xFF
+  }
+
+  if (placeHolders === 2) {
+    tmp = (revLookup[b64.charCodeAt(i)] << 2) | (revLookup[b64.charCodeAt(i + 1)] >> 4)
+    arr[L++] = tmp & 0xFF
+  } else if (placeHolders === 1) {
+    tmp = (revLookup[b64.charCodeAt(i)] << 10) | (revLookup[b64.charCodeAt(i + 1)] << 4) | (revLookup[b64.charCodeAt(i + 2)] >> 2)
+    arr[L++] = (tmp >> 8) & 0xFF
+    arr[L++] = tmp & 0xFF
+  }
+
+  return arr
+}
+
+function tripletToBase64 (num) {
+  return lookup[num >> 18 & 0x3F] + lookup[num >> 12 & 0x3F] + lookup[num >> 6 & 0x3F] + lookup[num & 0x3F]
+}
+
+function encodeChunk (uint8, start, end) {
+  var tmp
+  var output = []
+  for (var i = start; i < end; i += 3) {
+    tmp = (uint8[i] << 16) + (uint8[i + 1] << 8) + (uint8[i + 2])
+    output.push(tripletToBase64(tmp))
+  }
+  return output.join('')
+}
+
+function fromByteArray (uint8) {
+  var tmp
+  var len = uint8.length
+  var extraBytes = len % 3 // if we have 1 byte left, pad 2 bytes
+  var output = ''
+  var parts = []
+  var maxChunkLength = 16383 // must be multiple of 3
+
+  // go through the array every three bytes, we'll deal with trailing stuff later
+  for (var i = 0, len2 = len - extraBytes; i < len2; i += maxChunkLength) {
+    parts.push(encodeChunk(uint8, i, (i + maxChunkLength) > len2 ? len2 : (i + maxChunkLength)))
+  }
+
+  // pad the end with zeros, but make sure to not forget the extra bytes
+  if (extraBytes === 1) {
+    tmp = uint8[len - 1]
+    output += lookup[tmp >> 2]
+    output += lookup[(tmp << 4) & 0x3F]
+    output += '=='
+  } else if (extraBytes === 2) {
+    tmp = (uint8[len - 2] << 8) + (uint8[len - 1])
+    output += lookup[tmp >> 10]
+    output += lookup[(tmp >> 4) & 0x3F]
+    output += lookup[(tmp << 2) & 0x3F]
+    output += '='
+  }
+
+  parts.push(output)
+
+  return parts.join('')
+}
+
+},{}],27:[function(require,module,exports){
+/*!
+ * The buffer module from node.js, for the browser.
+ *
+ * @author   Feross Aboukhadijeh <feross@feross.org> <http://feross.org>
+ * @license  MIT
+ */
+/* eslint-disable no-proto */
+
+'use strict'
+
+var base64 = require('base64-js')
+var ieee754 = require('ieee754')
+
+exports.Buffer = Buffer
+exports.SlowBuffer = SlowBuffer
+exports.INSPECT_MAX_BYTES = 50
+
+var K_MAX_LENGTH = 0x7fffffff
+exports.kMaxLength = K_MAX_LENGTH
+
+/**
+ * If `Buffer.TYPED_ARRAY_SUPPORT`:
+ *   === true    Use Uint8Array implementation (fastest)
+ *   === false   Print warning and recommend using `buffer` v4.x which has an Object
+ *               implementation (most compatible, even IE6)
+ *
+ * Browsers that support typed arrays are IE 10+, Firefox 4+, Chrome 7+, Safari 5.1+,
+ * Opera 11.6+, iOS 4.2+.
+ *
+ * We report that the browser does not support typed arrays if the are not subclassable
+ * using __proto__. Firefox 4-29 lacks support for adding new properties to `Uint8Array`
+ * (See: https://bugzilla.mozilla.org/show_bug.cgi?id=695438). IE 10 lacks support
+ * for __proto__ and has a buggy typed array implementation.
+ */
+Buffer.TYPED_ARRAY_SUPPORT = typedArraySupport()
+
+if (!Buffer.TYPED_ARRAY_SUPPORT && typeof console !== 'undefined' &&
+    typeof console.error === 'function') {
+  console.error(
+    'This browser lacks typed array (Uint8Array) support which is required by ' +
+    '`buffer` v5.x. Use `buffer` v4.x if you require old browser support.'
+  )
+}
+
+function typedArraySupport () {
+  // Can typed array instances can be augmented?
+  try {
+    var arr = new Uint8Array(1)
+    arr.__proto__ = {__proto__: Uint8Array.prototype, foo: function () { return 42 }}
+    return arr.foo() === 42
+  } catch (e) {
+    return false
+  }
+}
+
+function createBuffer (length) {
+  if (length > K_MAX_LENGTH) {
+    throw new RangeError('Invalid typed array length')
+  }
+  // Return an augmented `Uint8Array` instance
+  var buf = new Uint8Array(length)
+  buf.__proto__ = Buffer.prototype
+  return buf
+}
+
+/**
+ * The Buffer constructor returns instances of `Uint8Array` that have their
+ * prototype changed to `Buffer.prototype`. Furthermore, `Buffer` is a subclass of
+ * `Uint8Array`, so the returned instances will have all the node `Buffer` methods
+ * and the `Uint8Array` methods. Square bracket notation works as expected -- it
+ * returns a single octet.
+ *
+ * The `Uint8Array` prototype remains unmodified.
+ */
+
+function Buffer (arg, encodingOrOffset, length) {
+  // Common case.
+  if (typeof arg === 'number') {
+    if (typeof encodingOrOffset === 'string') {
+      throw new Error(
+        'If encoding is specified then the first argument must be a string'
+      )
+    }
+    return allocUnsafe(arg)
+  }
+  return from(arg, encodingOrOffset, length)
+}
+
+// Fix subarray() in ES2016. See: https://github.com/feross/buffer/pull/97
+if (typeof Symbol !== 'undefined' && Symbol.species &&
+    Buffer[Symbol.species] === Buffer) {
+  Object.defineProperty(Buffer, Symbol.species, {
+    value: null,
+    configurable: true,
+    enumerable: false,
+    writable: false
+  })
+}
+
+Buffer.poolSize = 8192 // not used by this implementation
+
+function from (value, encodingOrOffset, length) {
+  if (typeof value === 'number') {
+    throw new TypeError('"value" argument must not be a number')
+  }
+
+  if (value instanceof ArrayBuffer) {
+    return fromArrayBuffer(value, encodingOrOffset, length)
+  }
+
+  if (typeof value === 'string') {
+    return fromString(value, encodingOrOffset)
+  }
+
+  return fromObject(value)
+}
+
+/**
+ * Functionally equivalent to Buffer(arg, encoding) but throws a TypeError
+ * if value is a number.
+ * Buffer.from(str[, encoding])
+ * Buffer.from(array)
+ * Buffer.from(buffer)
+ * Buffer.from(arrayBuffer[, byteOffset[, length]])
+ **/
+Buffer.from = function (value, encodingOrOffset, length) {
+  return from(value, encodingOrOffset, length)
+}
+
+// Note: Change prototype *after* Buffer.from is defined to workaround Chrome bug:
+// https://github.com/feross/buffer/pull/148
+Buffer.prototype.__proto__ = Uint8Array.prototype
+Buffer.__proto__ = Uint8Array
+
+function assertSize (size) {
+  if (typeof size !== 'number') {
+    throw new TypeError('"size" argument must be a number')
+  } else if (size < 0) {
+    throw new RangeError('"size" argument must not be negative')
+  }
+}
+
+function alloc (size, fill, encoding) {
+  assertSize(size)
+  if (size <= 0) {
+    return createBuffer(size)
+  }
+  if (fill !== undefined) {
+    // Only pay attention to encoding if it's a string. This
+    // prevents accidentally sending in a number that would
+    // be interpretted as a start offset.
+    return typeof encoding === 'string'
+      ? createBuffer(size).fill(fill, encoding)
+      : createBuffer(size).fill(fill)
+  }
+  return createBuffer(size)
+}
+
+/**
+ * Creates a new filled Buffer instance.
+ * alloc(size[, fill[, encoding]])
+ **/
+Buffer.alloc = function (size, fill, encoding) {
+  return alloc(size, fill, encoding)
+}
+
+function allocUnsafe (size) {
+  assertSize(size)
+  return createBuffer(size < 0 ? 0 : checked(size) | 0)
+}
+
+/**
+ * Equivalent to Buffer(num), by default creates a non-zero-filled Buffer instance.
+ * */
+Buffer.allocUnsafe = function (size) {
+  return allocUnsafe(size)
+}
+/**
+ * Equivalent to SlowBuffer(num), by default creates a non-zero-filled Buffer instance.
+ */
+Buffer.allocUnsafeSlow = function (size) {
+  return allocUnsafe(size)
+}
+
+function fromString (string, encoding) {
+  if (typeof encoding !== 'string' || encoding === '') {
+    encoding = 'utf8'
+  }
+
+  if (!Buffer.isEncoding(encoding)) {
+    throw new TypeError('"encoding" must be a valid string encoding')
+  }
+
+  var length = byteLength(string, encoding) | 0
+  var buf = createBuffer(length)
+
+  var actual = buf.write(string, encoding)
+
+  if (actual !== length) {
+    // Writing a hex string, for example, that contains invalid characters will
+    // cause everything after the first invalid character to be ignored. (e.g.
+    // 'abxxcd' will be treated as 'ab')
+    buf = buf.slice(0, actual)
+  }
+
+  return buf
+}
+
+function fromArrayLike (array) {
+  var length = array.length < 0 ? 0 : checked(array.length) | 0
+  var buf = createBuffer(length)
+  for (var i = 0; i < length; i += 1) {
+    buf[i] = array[i] & 255
+  }
+  return buf
+}
+
+function fromArrayBuffer (array, byteOffset, length) {
+  if (byteOffset < 0 || array.byteLength < byteOffset) {
+    throw new RangeError('\'offset\' is out of bounds')
+  }
+
+  if (array.byteLength < byteOffset + (length || 0)) {
+    throw new RangeError('\'length\' is out of bounds')
+  }
+
+  var buf
+  if (byteOffset === undefined && length === undefined) {
+    buf = new Uint8Array(array)
+  } else if (length === undefined) {
+    buf = new Uint8Array(array, byteOffset)
+  } else {
+    buf = new Uint8Array(array, byteOffset, length)
+  }
+
+  // Return an augmented `Uint8Array` instance
+  buf.__proto__ = Buffer.prototype
+  return buf
+}
+
+function fromObject (obj) {
+  if (Buffer.isBuffer(obj)) {
+    var len = checked(obj.length) | 0
+    var buf = createBuffer(len)
+
+    if (buf.length === 0) {
+      return buf
+    }
+
+    obj.copy(buf, 0, 0, len)
+    return buf
+  }
+
+  if (obj) {
+    if (isArrayBufferView(obj) || 'length' in obj) {
+      if (typeof obj.length !== 'number' || numberIsNaN(obj.length)) {
+        return createBuffer(0)
+      }
+      return fromArrayLike(obj)
+    }
+
+    if (obj.type === 'Buffer' && Array.isArray(obj.data)) {
+      return fromArrayLike(obj.data)
+    }
+  }
+
+  throw new TypeError('First argument must be a string, Buffer, ArrayBuffer, Array, or array-like object.')
+}
+
+function checked (length) {
+  // Note: cannot use `length < K_MAX_LENGTH` here because that fails when
+  // length is NaN (which is otherwise coerced to zero.)
+  if (length >= K_MAX_LENGTH) {
+    throw new RangeError('Attempt to allocate Buffer larger than maximum ' +
+                         'size: 0x' + K_MAX_LENGTH.toString(16) + ' bytes')
+  }
+  return length | 0
+}
+
+function SlowBuffer (length) {
+  if (+length != length) { // eslint-disable-line eqeqeq
+    length = 0
+  }
+  return Buffer.alloc(+length)
+}
+
+Buffer.isBuffer = function isBuffer (b) {
+  return b != null && b._isBuffer === true
+}
+
+Buffer.compare = function compare (a, b) {
+  if (!Buffer.isBuffer(a) || !Buffer.isBuffer(b)) {
+    throw new TypeError('Arguments must be Buffers')
+  }
+
+  if (a === b) return 0
+
+  var x = a.length
+  var y = b.length
+
+  for (var i = 0, len = Math.min(x, y); i < len; ++i) {
+    if (a[i] !== b[i]) {
+      x = a[i]
+      y = b[i]
+      break
+    }
+  }
+
+  if (x < y) return -1
+  if (y < x) return 1
+  return 0
+}
+
+Buffer.isEncoding = function isEncoding (encoding) {
+  switch (String(encoding).toLowerCase()) {
+    case 'hex':
+    case 'utf8':
+    case 'utf-8':
+    case 'ascii':
+    case 'latin1':
+    case 'binary':
+    case 'base64':
+    case 'ucs2':
+    case 'ucs-2':
+    case 'utf16le':
+    case 'utf-16le':
+      return true
+    default:
+      return false
+  }
+}
+
+Buffer.concat = function concat (list, length) {
+  if (!Array.isArray(list)) {
+    throw new TypeError('"list" argument must be an Array of Buffers')
+  }
+
+  if (list.length === 0) {
+    return Buffer.alloc(0)
+  }
+
+  var i
+  if (length === undefined) {
+    length = 0
+    for (i = 0; i < list.length; ++i) {
+      length += list[i].length
+    }
+  }
+
+  var buffer = Buffer.allocUnsafe(length)
+  var pos = 0
+  for (i = 0; i < list.length; ++i) {
+    var buf = list[i]
+    if (!Buffer.isBuffer(buf)) {
+      throw new TypeError('"list" argument must be an Array of Buffers')
+    }
+    buf.copy(buffer, pos)
+    pos += buf.length
+  }
+  return buffer
+}
+
+function byteLength (string, encoding) {
+  if (Buffer.isBuffer(string)) {
+    return string.length
+  }
+  if (isArrayBufferView(string) || string instanceof ArrayBuffer) {
+    return string.byteLength
+  }
+  if (typeof string !== 'string') {
+    string = '' + string
+  }
+
+  var len = string.length
+  if (len === 0) return 0
+
+  // Use a for loop to avoid recursion
+  var loweredCase = false
+  for (;;) {
+    switch (encoding) {
+      case 'ascii':
+      case 'latin1':
+      case 'binary':
+        return len
+      case 'utf8':
+      case 'utf-8':
+      case undefined:
+        return utf8ToBytes(string).length
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+        return len * 2
+      case 'hex':
+        return len >>> 1
+      case 'base64':
+        return base64ToBytes(string).length
+      default:
+        if (loweredCase) return utf8ToBytes(string).length // assume utf8
+        encoding = ('' + encoding).toLowerCase()
+        loweredCase = true
+    }
+  }
+}
+Buffer.byteLength = byteLength
+
+function slowToString (encoding, start, end) {
+  var loweredCase = false
+
+  // No need to verify that "this.length <= MAX_UINT32" since it's a read-only
+  // property of a typed array.
+
+  // This behaves neither like String nor Uint8Array in that we set start/end
+  // to their upper/lower bounds if the value passed is out of range.
+  // undefined is handled specially as per ECMA-262 6th Edition,
+  // Section 13.3.3.7 Runtime Semantics: KeyedBindingInitialization.
+  if (start === undefined || start < 0) {
+    start = 0
+  }
+  // Return early if start > this.length. Done here to prevent potential uint32
+  // coercion fail below.
+  if (start > this.length) {
+    return ''
+  }
+
+  if (end === undefined || end > this.length) {
+    end = this.length
+  }
+
+  if (end <= 0) {
+    return ''
+  }
+
+  // Force coersion to uint32. This will also coerce falsey/NaN values to 0.
+  end >>>= 0
+  start >>>= 0
+
+  if (end <= start) {
+    return ''
+  }
+
+  if (!encoding) encoding = 'utf8'
+
+  while (true) {
+    switch (encoding) {
+      case 'hex':
+        return hexSlice(this, start, end)
+
+      case 'utf8':
+      case 'utf-8':
+        return utf8Slice(this, start, end)
+
+      case 'ascii':
+        return asciiSlice(this, start, end)
+
+      case 'latin1':
+      case 'binary':
+        return latin1Slice(this, start, end)
+
+      case 'base64':
+        return base64Slice(this, start, end)
+
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+        return utf16leSlice(this, start, end)
+
+      default:
+        if (loweredCase) throw new TypeError('Unknown encoding: ' + encoding)
+        encoding = (encoding + '').toLowerCase()
+        loweredCase = true
+    }
+  }
+}
+
+// This property is used by `Buffer.isBuffer` (and the `is-buffer` npm package)
+// to detect a Buffer instance. It's not possible to use `instanceof Buffer`
+// reliably in a browserify context because there could be multiple different
+// copies of the 'buffer' package in use. This method works even for Buffer
+// instances that were created from another copy of the `buffer` package.
+// See: https://github.com/feross/buffer/issues/154
+Buffer.prototype._isBuffer = true
+
+function swap (b, n, m) {
+  var i = b[n]
+  b[n] = b[m]
+  b[m] = i
+}
+
+Buffer.prototype.swap16 = function swap16 () {
+  var len = this.length
+  if (len % 2 !== 0) {
+    throw new RangeError('Buffer size must be a multiple of 16-bits')
+  }
+  for (var i = 0; i < len; i += 2) {
+    swap(this, i, i + 1)
+  }
+  return this
+}
+
+Buffer.prototype.swap32 = function swap32 () {
+  var len = this.length
+  if (len % 4 !== 0) {
+    throw new RangeError('Buffer size must be a multiple of 32-bits')
+  }
+  for (var i = 0; i < len; i += 4) {
+    swap(this, i, i + 3)
+    swap(this, i + 1, i + 2)
+  }
+  return this
+}
+
+Buffer.prototype.swap64 = function swap64 () {
+  var len = this.length
+  if (len % 8 !== 0) {
+    throw new RangeError('Buffer size must be a multiple of 64-bits')
+  }
+  for (var i = 0; i < len; i += 8) {
+    swap(this, i, i + 7)
+    swap(this, i + 1, i + 6)
+    swap(this, i + 2, i + 5)
+    swap(this, i + 3, i + 4)
+  }
+  return this
+}
+
+Buffer.prototype.toString = function toString () {
+  var length = this.length
+  if (length === 0) return ''
+  if (arguments.length === 0) return utf8Slice(this, 0, length)
+  return slowToString.apply(this, arguments)
+}
+
+Buffer.prototype.equals = function equals (b) {
+  if (!Buffer.isBuffer(b)) throw new TypeError('Argument must be a Buffer')
+  if (this === b) return true
+  return Buffer.compare(this, b) === 0
+}
+
+Buffer.prototype.inspect = function inspect () {
+  var str = ''
+  var max = exports.INSPECT_MAX_BYTES
+  if (this.length > 0) {
+    str = this.toString('hex', 0, max).match(/.{2}/g).join(' ')
+    if (this.length > max) str += ' ... '
+  }
+  return '<Buffer ' + str + '>'
+}
+
+Buffer.prototype.compare = function compare (target, start, end, thisStart, thisEnd) {
+  if (!Buffer.isBuffer(target)) {
+    throw new TypeError('Argument must be a Buffer')
+  }
+
+  if (start === undefined) {
+    start = 0
+  }
+  if (end === undefined) {
+    end = target ? target.length : 0
+  }
+  if (thisStart === undefined) {
+    thisStart = 0
+  }
+  if (thisEnd === undefined) {
+    thisEnd = this.length
+  }
+
+  if (start < 0 || end > target.length || thisStart < 0 || thisEnd > this.length) {
+    throw new RangeError('out of range index')
+  }
+
+  if (thisStart >= thisEnd && start >= end) {
+    return 0
+  }
+  if (thisStart >= thisEnd) {
+    return -1
+  }
+  if (start >= end) {
+    return 1
+  }
+
+  start >>>= 0
+  end >>>= 0
+  thisStart >>>= 0
+  thisEnd >>>= 0
+
+  if (this === target) return 0
+
+  var x = thisEnd - thisStart
+  var y = end - start
+  var len = Math.min(x, y)
+
+  var thisCopy = this.slice(thisStart, thisEnd)
+  var targetCopy = target.slice(start, end)
+
+  for (var i = 0; i < len; ++i) {
+    if (thisCopy[i] !== targetCopy[i]) {
+      x = thisCopy[i]
+      y = targetCopy[i]
+      break
+    }
+  }
+
+  if (x < y) return -1
+  if (y < x) return 1
+  return 0
+}
+
+// Finds either the first index of `val` in `buffer` at offset >= `byteOffset`,
+// OR the last index of `val` in `buffer` at offset <= `byteOffset`.
+//
+// Arguments:
+// - buffer - a Buffer to search
+// - val - a string, Buffer, or number
+// - byteOffset - an index into `buffer`; will be clamped to an int32
+// - encoding - an optional encoding, relevant is val is a string
+// - dir - true for indexOf, false for lastIndexOf
+function bidirectionalIndexOf (buffer, val, byteOffset, encoding, dir) {
+  // Empty buffer means no match
+  if (buffer.length === 0) return -1
+
+  // Normalize byteOffset
+  if (typeof byteOffset === 'string') {
+    encoding = byteOffset
+    byteOffset = 0
+  } else if (byteOffset > 0x7fffffff) {
+    byteOffset = 0x7fffffff
+  } else if (byteOffset < -0x80000000) {
+    byteOffset = -0x80000000
+  }
+  byteOffset = +byteOffset  // Coerce to Number.
+  if (numberIsNaN(byteOffset)) {
+    // byteOffset: it it's undefined, null, NaN, "foo", etc, search whole buffer
+    byteOffset = dir ? 0 : (buffer.length - 1)
+  }
+
+  // Normalize byteOffset: negative offsets start from the end of the buffer
+  if (byteOffset < 0) byteOffset = buffer.length + byteOffset
+  if (byteOffset >= buffer.length) {
+    if (dir) return -1
+    else byteOffset = buffer.length - 1
+  } else if (byteOffset < 0) {
+    if (dir) byteOffset = 0
+    else return -1
+  }
+
+  // Normalize val
+  if (typeof val === 'string') {
+    val = Buffer.from(val, encoding)
+  }
+
+  // Finally, search either indexOf (if dir is true) or lastIndexOf
+  if (Buffer.isBuffer(val)) {
+    // Special case: looking for empty string/buffer always fails
+    if (val.length === 0) {
+      return -1
+    }
+    return arrayIndexOf(buffer, val, byteOffset, encoding, dir)
+  } else if (typeof val === 'number') {
+    val = val & 0xFF // Search for a byte value [0-255]
+    if (typeof Uint8Array.prototype.indexOf === 'function') {
+      if (dir) {
+        return Uint8Array.prototype.indexOf.call(buffer, val, byteOffset)
+      } else {
+        return Uint8Array.prototype.lastIndexOf.call(buffer, val, byteOffset)
+      }
+    }
+    return arrayIndexOf(buffer, [ val ], byteOffset, encoding, dir)
+  }
+
+  throw new TypeError('val must be string, number or Buffer')
+}
+
+function arrayIndexOf (arr, val, byteOffset, encoding, dir) {
+  var indexSize = 1
+  var arrLength = arr.length
+  var valLength = val.length
+
+  if (encoding !== undefined) {
+    encoding = String(encoding).toLowerCase()
+    if (encoding === 'ucs2' || encoding === 'ucs-2' ||
+        encoding === 'utf16le' || encoding === 'utf-16le') {
+      if (arr.length < 2 || val.length < 2) {
+        return -1
+      }
+      indexSize = 2
+      arrLength /= 2
+      valLength /= 2
+      byteOffset /= 2
+    }
+  }
+
+  function read (buf, i) {
+    if (indexSize === 1) {
+      return buf[i]
+    } else {
+      return buf.readUInt16BE(i * indexSize)
+    }
+  }
+
+  var i
+  if (dir) {
+    var foundIndex = -1
+    for (i = byteOffset; i < arrLength; i++) {
+      if (read(arr, i) === read(val, foundIndex === -1 ? 0 : i - foundIndex)) {
+        if (foundIndex === -1) foundIndex = i
+        if (i - foundIndex + 1 === valLength) return foundIndex * indexSize
+      } else {
+        if (foundIndex !== -1) i -= i - foundIndex
+        foundIndex = -1
+      }
+    }
+  } else {
+    if (byteOffset + valLength > arrLength) byteOffset = arrLength - valLength
+    for (i = byteOffset; i >= 0; i--) {
+      var found = true
+      for (var j = 0; j < valLength; j++) {
+        if (read(arr, i + j) !== read(val, j)) {
+          found = false
+          break
+        }
+      }
+      if (found) return i
+    }
+  }
+
+  return -1
+}
+
+Buffer.prototype.includes = function includes (val, byteOffset, encoding) {
+  return this.indexOf(val, byteOffset, encoding) !== -1
+}
+
+Buffer.prototype.indexOf = function indexOf (val, byteOffset, encoding) {
+  return bidirectionalIndexOf(this, val, byteOffset, encoding, true)
+}
+
+Buffer.prototype.lastIndexOf = function lastIndexOf (val, byteOffset, encoding) {
+  return bidirectionalIndexOf(this, val, byteOffset, encoding, false)
+}
+
+function hexWrite (buf, string, offset, length) {
+  offset = Number(offset) || 0
+  var remaining = buf.length - offset
+  if (!length) {
+    length = remaining
+  } else {
+    length = Number(length)
+    if (length > remaining) {
+      length = remaining
+    }
+  }
+
+  // must be an even number of digits
+  var strLen = string.length
+  if (strLen % 2 !== 0) throw new TypeError('Invalid hex string')
+
+  if (length > strLen / 2) {
+    length = strLen / 2
+  }
+  for (var i = 0; i < length; ++i) {
+    var parsed = parseInt(string.substr(i * 2, 2), 16)
+    if (numberIsNaN(parsed)) return i
+    buf[offset + i] = parsed
+  }
+  return i
+}
+
+function utf8Write (buf, string, offset, length) {
+  return blitBuffer(utf8ToBytes(string, buf.length - offset), buf, offset, length)
+}
+
+function asciiWrite (buf, string, offset, length) {
+  return blitBuffer(asciiToBytes(string), buf, offset, length)
+}
+
+function latin1Write (buf, string, offset, length) {
+  return asciiWrite(buf, string, offset, length)
+}
+
+function base64Write (buf, string, offset, length) {
+  return blitBuffer(base64ToBytes(string), buf, offset, length)
+}
+
+function ucs2Write (buf, string, offset, length) {
+  return blitBuffer(utf16leToBytes(string, buf.length - offset), buf, offset, length)
+}
+
+Buffer.prototype.write = function write (string, offset, length, encoding) {
+  // Buffer#write(string)
+  if (offset === undefined) {
+    encoding = 'utf8'
+    length = this.length
+    offset = 0
+  // Buffer#write(string, encoding)
+  } else if (length === undefined && typeof offset === 'string') {
+    encoding = offset
+    length = this.length
+    offset = 0
+  // Buffer#write(string, offset[, length][, encoding])
+  } else if (isFinite(offset)) {
+    offset = offset >>> 0
+    if (isFinite(length)) {
+      length = length >>> 0
+      if (encoding === undefined) encoding = 'utf8'
+    } else {
+      encoding = length
+      length = undefined
+    }
+  } else {
+    throw new Error(
+      'Buffer.write(string, encoding, offset[, length]) is no longer supported'
+    )
+  }
+
+  var remaining = this.length - offset
+  if (length === undefined || length > remaining) length = remaining
+
+  if ((string.length > 0 && (length < 0 || offset < 0)) || offset > this.length) {
+    throw new RangeError('Attempt to write outside buffer bounds')
+  }
+
+  if (!encoding) encoding = 'utf8'
+
+  var loweredCase = false
+  for (;;) {
+    switch (encoding) {
+      case 'hex':
+        return hexWrite(this, string, offset, length)
+
+      case 'utf8':
+      case 'utf-8':
+        return utf8Write(this, string, offset, length)
+
+      case 'ascii':
+        return asciiWrite(this, string, offset, length)
+
+      case 'latin1':
+      case 'binary':
+        return latin1Write(this, string, offset, length)
+
+      case 'base64':
+        // Warning: maxLength not taken into account in base64Write
+        return base64Write(this, string, offset, length)
+
+      case 'ucs2':
+      case 'ucs-2':
+      case 'utf16le':
+      case 'utf-16le':
+        return ucs2Write(this, string, offset, length)
+
+      default:
+        if (loweredCase) throw new TypeError('Unknown encoding: ' + encoding)
+        encoding = ('' + encoding).toLowerCase()
+        loweredCase = true
+    }
+  }
+}
+
+Buffer.prototype.toJSON = function toJSON () {
+  return {
+    type: 'Buffer',
+    data: Array.prototype.slice.call(this._arr || this, 0)
+  }
+}
+
+function base64Slice (buf, start, end) {
+  if (start === 0 && end === buf.length) {
+    return base64.fromByteArray(buf)
+  } else {
+    return base64.fromByteArray(buf.slice(start, end))
+  }
+}
+
+function utf8Slice (buf, start, end) {
+  end = Math.min(buf.length, end)
+  var res = []
+
+  var i = start
+  while (i < end) {
+    var firstByte = buf[i]
+    var codePoint = null
+    var bytesPerSequence = (firstByte > 0xEF) ? 4
+      : (firstByte > 0xDF) ? 3
+      : (firstByte > 0xBF) ? 2
+      : 1
+
+    if (i + bytesPerSequence <= end) {
+      var secondByte, thirdByte, fourthByte, tempCodePoint
+
+      switch (bytesPerSequence) {
+        case 1:
+          if (firstByte < 0x80) {
+            codePoint = firstByte
+          }
+          break
+        case 2:
+          secondByte = buf[i + 1]
+          if ((secondByte & 0xC0) === 0x80) {
+            tempCodePoint = (firstByte & 0x1F) << 0x6 | (secondByte & 0x3F)
+            if (tempCodePoint > 0x7F) {
+              codePoint = tempCodePoint
+            }
+          }
+          break
+        case 3:
+          secondByte = buf[i + 1]
+          thirdByte = buf[i + 2]
+          if ((secondByte & 0xC0) === 0x80 && (thirdByte & 0xC0) === 0x80) {
+            tempCodePoint = (firstByte & 0xF) << 0xC | (secondByte & 0x3F) << 0x6 | (thirdByte & 0x3F)
+            if (tempCodePoint > 0x7FF && (tempCodePoint < 0xD800 || tempCodePoint > 0xDFFF)) {
+              codePoint = tempCodePoint
+            }
+          }
+          break
+        case 4:
+          secondByte = buf[i + 1]
+          thirdByte = buf[i + 2]
+          fourthByte = buf[i + 3]
+          if ((secondByte & 0xC0) === 0x80 && (thirdByte & 0xC0) === 0x80 && (fourthByte & 0xC0) === 0x80) {
+            tempCodePoint = (firstByte & 0xF) << 0x12 | (secondByte & 0x3F) << 0xC | (thirdByte & 0x3F) << 0x6 | (fourthByte & 0x3F)
+            if (tempCodePoint > 0xFFFF && tempCodePoint < 0x110000) {
+              codePoint = tempCodePoint
+            }
+          }
+      }
+    }
+
+    if (codePoint === null) {
+      // we did not generate a valid codePoint so insert a
+      // replacement char (U+FFFD) and advance only 1 byte
+      codePoint = 0xFFFD
+      bytesPerSequence = 1
+    } else if (codePoint > 0xFFFF) {
+      // encode to utf16 (surrogate pair dance)
+      codePoint -= 0x10000
+      res.push(codePoint >>> 10 & 0x3FF | 0xD800)
+      codePoint = 0xDC00 | codePoint & 0x3FF
+    }
+
+    res.push(codePoint)
+    i += bytesPerSequence
+  }
+
+  return decodeCodePointsArray(res)
+}
+
+// Based on http://stackoverflow.com/a/22747272/680742, the browser with
+// the lowest limit is Chrome, with 0x10000 args.
+// We go 1 magnitude less, for safety
+var MAX_ARGUMENTS_LENGTH = 0x1000
+
+function decodeCodePointsArray (codePoints) {
+  var len = codePoints.length
+  if (len <= MAX_ARGUMENTS_LENGTH) {
+    return String.fromCharCode.apply(String, codePoints) // avoid extra slice()
+  }
+
+  // Decode in chunks to avoid "call stack size exceeded".
+  var res = ''
+  var i = 0
+  while (i < len) {
+    res += String.fromCharCode.apply(
+      String,
+      codePoints.slice(i, i += MAX_ARGUMENTS_LENGTH)
+    )
+  }
+  return res
+}
+
+function asciiSlice (buf, start, end) {
+  var ret = ''
+  end = Math.min(buf.length, end)
+
+  for (var i = start; i < end; ++i) {
+    ret += String.fromCharCode(buf[i] & 0x7F)
+  }
+  return ret
+}
+
+function latin1Slice (buf, start, end) {
+  var ret = ''
+  end = Math.min(buf.length, end)
+
+  for (var i = start; i < end; ++i) {
+    ret += String.fromCharCode(buf[i])
+  }
+  return ret
+}
+
+function hexSlice (buf, start, end) {
+  var len = buf.length
+
+  if (!start || start < 0) start = 0
+  if (!end || end < 0 || end > len) end = len
+
+  var out = ''
+  for (var i = start; i < end; ++i) {
+    out += toHex(buf[i])
+  }
+  return out
+}
+
+function utf16leSlice (buf, start, end) {
+  var bytes = buf.slice(start, end)
+  var res = ''
+  for (var i = 0; i < bytes.length; i += 2) {
+    res += String.fromCharCode(bytes[i] + (bytes[i + 1] * 256))
+  }
+  return res
+}
+
+Buffer.prototype.slice = function slice (start, end) {
+  var len = this.length
+  start = ~~start
+  end = end === undefined ? len : ~~end
+
+  if (start < 0) {
+    start += len
+    if (start < 0) start = 0
+  } else if (start > len) {
+    start = len
+  }
+
+  if (end < 0) {
+    end += len
+    if (end < 0) end = 0
+  } else if (end > len) {
+    end = len
+  }
+
+  if (end < start) end = start
+
+  var newBuf = this.subarray(start, end)
+  // Return an augmented `Uint8Array` instance
+  newBuf.__proto__ = Buffer.prototype
+  return newBuf
+}
+
+/*
+ * Need to make sure that buffer isn't trying to write out of bounds.
+ */
+function checkOffset (offset, ext, length) {
+  if ((offset % 1) !== 0 || offset < 0) throw new RangeError('offset is not uint')
+  if (offset + ext > length) throw new RangeError('Trying to access beyond buffer length')
+}
+
+Buffer.prototype.readUIntLE = function readUIntLE (offset, byteLength, noAssert) {
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) checkOffset(offset, byteLength, this.length)
+
+  var val = this[offset]
+  var mul = 1
+  var i = 0
+  while (++i < byteLength && (mul *= 0x100)) {
+    val += this[offset + i] * mul
+  }
+
+  return val
+}
+
+Buffer.prototype.readUIntBE = function readUIntBE (offset, byteLength, noAssert) {
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) {
+    checkOffset(offset, byteLength, this.length)
+  }
+
+  var val = this[offset + --byteLength]
+  var mul = 1
+  while (byteLength > 0 && (mul *= 0x100)) {
+    val += this[offset + --byteLength] * mul
+  }
+
+  return val
+}
+
+Buffer.prototype.readUInt8 = function readUInt8 (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 1, this.length)
+  return this[offset]
+}
+
+Buffer.prototype.readUInt16LE = function readUInt16LE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 2, this.length)
+  return this[offset] | (this[offset + 1] << 8)
+}
+
+Buffer.prototype.readUInt16BE = function readUInt16BE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 2, this.length)
+  return (this[offset] << 8) | this[offset + 1]
+}
+
+Buffer.prototype.readUInt32LE = function readUInt32LE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+
+  return ((this[offset]) |
+      (this[offset + 1] << 8) |
+      (this[offset + 2] << 16)) +
+      (this[offset + 3] * 0x1000000)
+}
+
+Buffer.prototype.readUInt32BE = function readUInt32BE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+
+  return (this[offset] * 0x1000000) +
+    ((this[offset + 1] << 16) |
+    (this[offset + 2] << 8) |
+    this[offset + 3])
+}
+
+Buffer.prototype.readIntLE = function readIntLE (offset, byteLength, noAssert) {
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) checkOffset(offset, byteLength, this.length)
+
+  var val = this[offset]
+  var mul = 1
+  var i = 0
+  while (++i < byteLength && (mul *= 0x100)) {
+    val += this[offset + i] * mul
+  }
+  mul *= 0x80
+
+  if (val >= mul) val -= Math.pow(2, 8 * byteLength)
+
+  return val
+}
+
+Buffer.prototype.readIntBE = function readIntBE (offset, byteLength, noAssert) {
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) checkOffset(offset, byteLength, this.length)
+
+  var i = byteLength
+  var mul = 1
+  var val = this[offset + --i]
+  while (i > 0 && (mul *= 0x100)) {
+    val += this[offset + --i] * mul
+  }
+  mul *= 0x80
+
+  if (val >= mul) val -= Math.pow(2, 8 * byteLength)
+
+  return val
+}
+
+Buffer.prototype.readInt8 = function readInt8 (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 1, this.length)
+  if (!(this[offset] & 0x80)) return (this[offset])
+  return ((0xff - this[offset] + 1) * -1)
+}
+
+Buffer.prototype.readInt16LE = function readInt16LE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 2, this.length)
+  var val = this[offset] | (this[offset + 1] << 8)
+  return (val & 0x8000) ? val | 0xFFFF0000 : val
+}
+
+Buffer.prototype.readInt16BE = function readInt16BE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 2, this.length)
+  var val = this[offset + 1] | (this[offset] << 8)
+  return (val & 0x8000) ? val | 0xFFFF0000 : val
+}
+
+Buffer.prototype.readInt32LE = function readInt32LE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+
+  return (this[offset]) |
+    (this[offset + 1] << 8) |
+    (this[offset + 2] << 16) |
+    (this[offset + 3] << 24)
+}
+
+Buffer.prototype.readInt32BE = function readInt32BE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+
+  return (this[offset] << 24) |
+    (this[offset + 1] << 16) |
+    (this[offset + 2] << 8) |
+    (this[offset + 3])
+}
+
+Buffer.prototype.readFloatLE = function readFloatLE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+  return ieee754.read(this, offset, true, 23, 4)
+}
+
+Buffer.prototype.readFloatBE = function readFloatBE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 4, this.length)
+  return ieee754.read(this, offset, false, 23, 4)
+}
+
+Buffer.prototype.readDoubleLE = function readDoubleLE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 8, this.length)
+  return ieee754.read(this, offset, true, 52, 8)
+}
+
+Buffer.prototype.readDoubleBE = function readDoubleBE (offset, noAssert) {
+  offset = offset >>> 0
+  if (!noAssert) checkOffset(offset, 8, this.length)
+  return ieee754.read(this, offset, false, 52, 8)
+}
+
+function checkInt (buf, value, offset, ext, max, min) {
+  if (!Buffer.isBuffer(buf)) throw new TypeError('"buffer" argument must be a Buffer instance')
+  if (value > max || value < min) throw new RangeError('"value" argument is out of bounds')
+  if (offset + ext > buf.length) throw new RangeError('Index out of range')
+}
+
+Buffer.prototype.writeUIntLE = function writeUIntLE (value, offset, byteLength, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) {
+    var maxBytes = Math.pow(2, 8 * byteLength) - 1
+    checkInt(this, value, offset, byteLength, maxBytes, 0)
+  }
+
+  var mul = 1
+  var i = 0
+  this[offset] = value & 0xFF
+  while (++i < byteLength && (mul *= 0x100)) {
+    this[offset + i] = (value / mul) & 0xFF
+  }
+
+  return offset + byteLength
+}
+
+Buffer.prototype.writeUIntBE = function writeUIntBE (value, offset, byteLength, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  byteLength = byteLength >>> 0
+  if (!noAssert) {
+    var maxBytes = Math.pow(2, 8 * byteLength) - 1
+    checkInt(this, value, offset, byteLength, maxBytes, 0)
+  }
+
+  var i = byteLength - 1
+  var mul = 1
+  this[offset + i] = value & 0xFF
+  while (--i >= 0 && (mul *= 0x100)) {
+    this[offset + i] = (value / mul) & 0xFF
+  }
+
+  return offset + byteLength
+}
+
+Buffer.prototype.writeUInt8 = function writeUInt8 (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 1, 0xff, 0)
+  this[offset] = (value & 0xff)
+  return offset + 1
+}
+
+Buffer.prototype.writeUInt16LE = function writeUInt16LE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 2, 0xffff, 0)
+  this[offset] = (value & 0xff)
+  this[offset + 1] = (value >>> 8)
+  return offset + 2
+}
+
+Buffer.prototype.writeUInt16BE = function writeUInt16BE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 2, 0xffff, 0)
+  this[offset] = (value >>> 8)
+  this[offset + 1] = (value & 0xff)
+  return offset + 2
+}
+
+Buffer.prototype.writeUInt32LE = function writeUInt32LE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 4, 0xffffffff, 0)
+  this[offset + 3] = (value >>> 24)
+  this[offset + 2] = (value >>> 16)
+  this[offset + 1] = (value >>> 8)
+  this[offset] = (value & 0xff)
+  return offset + 4
+}
+
+Buffer.prototype.writeUInt32BE = function writeUInt32BE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 4, 0xffffffff, 0)
+  this[offset] = (value >>> 24)
+  this[offset + 1] = (value >>> 16)
+  this[offset + 2] = (value >>> 8)
+  this[offset + 3] = (value & 0xff)
+  return offset + 4
+}
+
+Buffer.prototype.writeIntLE = function writeIntLE (value, offset, byteLength, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) {
+    var limit = Math.pow(2, (8 * byteLength) - 1)
+
+    checkInt(this, value, offset, byteLength, limit - 1, -limit)
+  }
+
+  var i = 0
+  var mul = 1
+  var sub = 0
+  this[offset] = value & 0xFF
+  while (++i < byteLength && (mul *= 0x100)) {
+    if (value < 0 && sub === 0 && this[offset + i - 1] !== 0) {
+      sub = 1
+    }
+    this[offset + i] = ((value / mul) >> 0) - sub & 0xFF
+  }
+
+  return offset + byteLength
+}
+
+Buffer.prototype.writeIntBE = function writeIntBE (value, offset, byteLength, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) {
+    var limit = Math.pow(2, (8 * byteLength) - 1)
+
+    checkInt(this, value, offset, byteLength, limit - 1, -limit)
+  }
+
+  var i = byteLength - 1
+  var mul = 1
+  var sub = 0
+  this[offset + i] = value & 0xFF
+  while (--i >= 0 && (mul *= 0x100)) {
+    if (value < 0 && sub === 0 && this[offset + i + 1] !== 0) {
+      sub = 1
+    }
+    this[offset + i] = ((value / mul) >> 0) - sub & 0xFF
+  }
+
+  return offset + byteLength
+}
+
+Buffer.prototype.writeInt8 = function writeInt8 (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 1, 0x7f, -0x80)
+  if (value < 0) value = 0xff + value + 1
+  this[offset] = (value & 0xff)
+  return offset + 1
+}
+
+Buffer.prototype.writeInt16LE = function writeInt16LE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 2, 0x7fff, -0x8000)
+  this[offset] = (value & 0xff)
+  this[offset + 1] = (value >>> 8)
+  return offset + 2
+}
+
+Buffer.prototype.writeInt16BE = function writeInt16BE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 2, 0x7fff, -0x8000)
+  this[offset] = (value >>> 8)
+  this[offset + 1] = (value & 0xff)
+  return offset + 2
+}
+
+Buffer.prototype.writeInt32LE = function writeInt32LE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
+  this[offset] = (value & 0xff)
+  this[offset + 1] = (value >>> 8)
+  this[offset + 2] = (value >>> 16)
+  this[offset + 3] = (value >>> 24)
+  return offset + 4
+}
+
+Buffer.prototype.writeInt32BE = function writeInt32BE (value, offset, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) checkInt(this, value, offset, 4, 0x7fffffff, -0x80000000)
+  if (value < 0) value = 0xffffffff + value + 1
+  this[offset] = (value >>> 24)
+  this[offset + 1] = (value >>> 16)
+  this[offset + 2] = (value >>> 8)
+  this[offset + 3] = (value & 0xff)
+  return offset + 4
+}
+
+function checkIEEE754 (buf, value, offset, ext, max, min) {
+  if (offset + ext > buf.length) throw new RangeError('Index out of range')
+  if (offset < 0) throw new RangeError('Index out of range')
+}
+
+function writeFloat (buf, value, offset, littleEndian, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) {
+    checkIEEE754(buf, value, offset, 4, 3.4028234663852886e+38, -3.4028234663852886e+38)
+  }
+  ieee754.write(buf, value, offset, littleEndian, 23, 4)
+  return offset + 4
+}
+
+Buffer.prototype.writeFloatLE = function writeFloatLE (value, offset, noAssert) {
+  return writeFloat(this, value, offset, true, noAssert)
+}
+
+Buffer.prototype.writeFloatBE = function writeFloatBE (value, offset, noAssert) {
+  return writeFloat(this, value, offset, false, noAssert)
+}
+
+function writeDouble (buf, value, offset, littleEndian, noAssert) {
+  value = +value
+  offset = offset >>> 0
+  if (!noAssert) {
+    checkIEEE754(buf, value, offset, 8, 1.7976931348623157E+308, -1.7976931348623157E+308)
+  }
+  ieee754.write(buf, value, offset, littleEndian, 52, 8)
+  return offset + 8
+}
+
+Buffer.prototype.writeDoubleLE = function writeDoubleLE (value, offset, noAssert) {
+  return writeDouble(this, value, offset, true, noAssert)
+}
+
+Buffer.prototype.writeDoubleBE = function writeDoubleBE (value, offset, noAssert) {
+  return writeDouble(this, value, offset, false, noAssert)
+}
+
+// copy(targetBuffer, targetStart=0, sourceStart=0, sourceEnd=buffer.length)
+Buffer.prototype.copy = function copy (target, targetStart, start, end) {
+  if (!start) start = 0
+  if (!end && end !== 0) end = this.length
+  if (targetStart >= target.length) targetStart = target.length
+  if (!targetStart) targetStart = 0
+  if (end > 0 && end < start) end = start
+
+  // Copy 0 bytes; we're done
+  if (end === start) return 0
+  if (target.length === 0 || this.length === 0) return 0
+
+  // Fatal error conditions
+  if (targetStart < 0) {
+    throw new RangeError('targetStart out of bounds')
+  }
+  if (start < 0 || start >= this.length) throw new RangeError('sourceStart out of bounds')
+  if (end < 0) throw new RangeError('sourceEnd out of bounds')
+
+  // Are we oob?
+  if (end > this.length) end = this.length
+  if (target.length - targetStart < end - start) {
+    end = target.length - targetStart + start
+  }
+
+  var len = end - start
+  var i
+
+  if (this === target && start < targetStart && targetStart < end) {
+    // descending copy from end
+    for (i = len - 1; i >= 0; --i) {
+      target[i + targetStart] = this[i + start]
+    }
+  } else if (len < 1000) {
+    // ascending copy from start
+    for (i = 0; i < len; ++i) {
+      target[i + targetStart] = this[i + start]
+    }
+  } else {
+    Uint8Array.prototype.set.call(
+      target,
+      this.subarray(start, start + len),
+      targetStart
+    )
+  }
+
+  return len
+}
+
+// Usage:
+//    buffer.fill(number[, offset[, end]])
+//    buffer.fill(buffer[, offset[, end]])
+//    buffer.fill(string[, offset[, end]][, encoding])
+Buffer.prototype.fill = function fill (val, start, end, encoding) {
+  // Handle string cases:
+  if (typeof val === 'string') {
+    if (typeof start === 'string') {
+      encoding = start
+      start = 0
+      end = this.length
+    } else if (typeof end === 'string') {
+      encoding = end
+      end = this.length
+    }
+    if (val.length === 1) {
+      var code = val.charCodeAt(0)
+      if (code < 256) {
+        val = code
+      }
+    }
+    if (encoding !== undefined && typeof encoding !== 'string') {
+      throw new TypeError('encoding must be a string')
+    }
+    if (typeof encoding === 'string' && !Buffer.isEncoding(encoding)) {
+      throw new TypeError('Unknown encoding: ' + encoding)
+    }
+  } else if (typeof val === 'number') {
+    val = val & 255
+  }
+
+  // Invalid ranges are not set to a default, so can range check early.
+  if (start < 0 || this.length < start || this.length < end) {
+    throw new RangeError('Out of range index')
+  }
+
+  if (end <= start) {
+    return this
+  }
+
+  start = start >>> 0
+  end = end === undefined ? this.length : end >>> 0
+
+  if (!val) val = 0
+
+  var i
+  if (typeof val === 'number') {
+    for (i = start; i < end; ++i) {
+      this[i] = val
+    }
+  } else {
+    var bytes = Buffer.isBuffer(val)
+      ? val
+      : new Buffer(val, encoding)
+    var len = bytes.length
+    for (i = 0; i < end - start; ++i) {
+      this[i + start] = bytes[i % len]
+    }
+  }
+
+  return this
+}
+
+// HELPER FUNCTIONS
+// ================
+
+var INVALID_BASE64_RE = /[^+/0-9A-Za-z-_]/g
+
+function base64clean (str) {
+  // Node strips out invalid characters like \n and \t from the string, base64-js does not
+  str = str.trim().replace(INVALID_BASE64_RE, '')
+  // Node converts strings with length < 2 to ''
+  if (str.length < 2) return ''
+  // Node allows for non-padded base64 strings (missing trailing ===), base64-js does not
+  while (str.length % 4 !== 0) {
+    str = str + '='
+  }
+  return str
+}
+
+function toHex (n) {
+  if (n < 16) return '0' + n.toString(16)
+  return n.toString(16)
+}
+
+function utf8ToBytes (string, units) {
+  units = units || Infinity
+  var codePoint
+  var length = string.length
+  var leadSurrogate = null
+  var bytes = []
+
+  for (var i = 0; i < length; ++i) {
+    codePoint = string.charCodeAt(i)
+
+    // is surrogate component
+    if (codePoint > 0xD7FF && codePoint < 0xE000) {
+      // last char was a lead
+      if (!leadSurrogate) {
+        // no lead yet
+        if (codePoint > 0xDBFF) {
+          // unexpected trail
+          if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
+          continue
+        } else if (i + 1 === length) {
+          // unpaired lead
+          if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
+          continue
+        }
+
+        // valid lead
+        leadSurrogate = codePoint
+
+        continue
+      }
+
+      // 2 leads in a row
+      if (codePoint < 0xDC00) {
+        if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
+        leadSurrogate = codePoint
+        continue
+      }
+
+      // valid surrogate pair
+      codePoint = (leadSurrogate - 0xD800 << 10 | codePoint - 0xDC00) + 0x10000
+    } else if (leadSurrogate) {
+      // valid bmp char, but last char was a lead
+      if ((units -= 3) > -1) bytes.push(0xEF, 0xBF, 0xBD)
+    }
+
+    leadSurrogate = null
+
+    // encode utf8
+    if (codePoint < 0x80) {
+      if ((units -= 1) < 0) break
+      bytes.push(codePoint)
+    } else if (codePoint < 0x800) {
+      if ((units -= 2) < 0) break
+      bytes.push(
+        codePoint >> 0x6 | 0xC0,
+        codePoint & 0x3F | 0x80
+      )
+    } else if (codePoint < 0x10000) {
+      if ((units -= 3) < 0) break
+      bytes.push(
+        codePoint >> 0xC | 0xE0,
+        codePoint >> 0x6 & 0x3F | 0x80,
+        codePoint & 0x3F | 0x80
+      )
+    } else if (codePoint < 0x110000) {
+      if ((units -= 4) < 0) break
+      bytes.push(
+        codePoint >> 0x12 | 0xF0,
+        codePoint >> 0xC & 0x3F | 0x80,
+        codePoint >> 0x6 & 0x3F | 0x80,
+        codePoint & 0x3F | 0x80
+      )
+    } else {
+      throw new Error('Invalid code point')
+    }
+  }
+
+  return bytes
+}
+
+function asciiToBytes (str) {
+  var byteArray = []
+  for (var i = 0; i < str.length; ++i) {
+    // Node's code seems to be doing this and not & 0x7F..
+    byteArray.push(str.charCodeAt(i) & 0xFF)
+  }
+  return byteArray
+}
+
+function utf16leToBytes (str, units) {
+  var c, hi, lo
+  var byteArray = []
+  for (var i = 0; i < str.length; ++i) {
+    if ((units -= 2) < 0) break
+
+    c = str.charCodeAt(i)
+    hi = c >> 8
+    lo = c % 256
+    byteArray.push(lo)
+    byteArray.push(hi)
+  }
+
+  return byteArray
+}
+
+function base64ToBytes (str) {
+  return base64.toByteArray(base64clean(str))
+}
+
+function blitBuffer (src, dst, offset, length) {
+  for (var i = 0; i < length; ++i) {
+    if ((i + offset >= dst.length) || (i >= src.length)) break
+    dst[i + offset] = src[i]
+  }
+  return i
+}
+
+// Node 0.10 supports `ArrayBuffer` but lacks `ArrayBuffer.isView`
+function isArrayBufferView (obj) {
+  return (typeof ArrayBuffer.isView === 'function') && ArrayBuffer.isView(obj)
+}
+
+function numberIsNaN (obj) {
+  return obj !== obj // eslint-disable-line no-self-compare
+}
+
+},{"base64-js":26,"ieee754":28}],28:[function(require,module,exports){
+exports.read = function (buffer, offset, isLE, mLen, nBytes) {
+  var e, m
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var nBits = -7
+  var i = isLE ? (nBytes - 1) : 0
+  var d = isLE ? -1 : 1
+  var s = buffer[offset + i]
+
+  i += d
+
+  e = s & ((1 << (-nBits)) - 1)
+  s >>= (-nBits)
+  nBits += eLen
+  for (; nBits > 0; e = e * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+
+  m = e & ((1 << (-nBits)) - 1)
+  e >>= (-nBits)
+  nBits += mLen
+  for (; nBits > 0; m = m * 256 + buffer[offset + i], i += d, nBits -= 8) {}
+
+  if (e === 0) {
+    e = 1 - eBias
+  } else if (e === eMax) {
+    return m ? NaN : ((s ? -1 : 1) * Infinity)
+  } else {
+    m = m + Math.pow(2, mLen)
+    e = e - eBias
+  }
+  return (s ? -1 : 1) * m * Math.pow(2, e - mLen)
+}
+
+exports.write = function (buffer, value, offset, isLE, mLen, nBytes) {
+  var e, m, c
+  var eLen = nBytes * 8 - mLen - 1
+  var eMax = (1 << eLen) - 1
+  var eBias = eMax >> 1
+  var rt = (mLen === 23 ? Math.pow(2, -24) - Math.pow(2, -77) : 0)
+  var i = isLE ? 0 : (nBytes - 1)
+  var d = isLE ? 1 : -1
+  var s = value < 0 || (value === 0 && 1 / value < 0) ? 1 : 0
+
+  value = Math.abs(value)
+
+  if (isNaN(value) || value === Infinity) {
+    m = isNaN(value) ? 1 : 0
+    e = eMax
+  } else {
+    e = Math.floor(Math.log(value) / Math.LN2)
+    if (value * (c = Math.pow(2, -e)) < 1) {
+      e--
+      c *= 2
+    }
+    if (e + eBias >= 1) {
+      value += rt / c
+    } else {
+      value += rt * Math.pow(2, 1 - eBias)
+    }
+    if (value * c >= 2) {
+      e++
+      c /= 2
+    }
+
+    if (e + eBias >= eMax) {
+      m = 0
+      e = eMax
+    } else if (e + eBias >= 1) {
+      m = (value * c - 1) * Math.pow(2, mLen)
+      e = e + eBias
+    } else {
+      m = value * Math.pow(2, eBias - 1) * Math.pow(2, mLen)
+      e = 0
+    }
+  }
+
+  for (; mLen >= 8; buffer[offset + i] = m & 0xff, i += d, m /= 256, mLen -= 8) {}
+
+  e = (e << mLen) | m
+  eLen += mLen
+  for (; eLen > 0; buffer[offset + i] = e & 0xff, i += d, e /= 256, eLen -= 8) {}
+
+  buffer[offset + i - d] |= s * 128
+}
+
+},{}],29:[function(require,module,exports){
 /*
  Leaflet 1.0.3, a JS library for interactive maps. http://leafletjs.com
  (c) 2010-2016 Vladimir Agafonkin, (c) 2010-2011 CloudMade
@@ -13250,9 +16569,194 @@ L.control.layers = function (baseLayers, overlays, options) {
 
 }(window, document));
 
-},{}],2:[function(require,module,exports){
+},{}],30:[function(require,module,exports){
+// shim for using process in browser
+var process = module.exports = {};
+
+// cached from whatever global is present so that test runners that stub it
+// don't break things.  But we need to wrap it in a try catch in case it is
+// wrapped in strict mode code which doesn't define any globals.  It's inside a
+// function because try/catches deoptimize in certain engines.
+
+var cachedSetTimeout;
+var cachedClearTimeout;
+
+function defaultSetTimout() {
+    throw new Error('setTimeout has not been defined');
+}
+function defaultClearTimeout () {
+    throw new Error('clearTimeout has not been defined');
+}
+(function () {
+    try {
+        if (typeof setTimeout === 'function') {
+            cachedSetTimeout = setTimeout;
+        } else {
+            cachedSetTimeout = defaultSetTimout;
+        }
+    } catch (e) {
+        cachedSetTimeout = defaultSetTimout;
+    }
+    try {
+        if (typeof clearTimeout === 'function') {
+            cachedClearTimeout = clearTimeout;
+        } else {
+            cachedClearTimeout = defaultClearTimeout;
+        }
+    } catch (e) {
+        cachedClearTimeout = defaultClearTimeout;
+    }
+} ())
+function runTimeout(fun) {
+    if (cachedSetTimeout === setTimeout) {
+        //normal enviroments in sane situations
+        return setTimeout(fun, 0);
+    }
+    // if setTimeout wasn't available but was latter defined
+    if ((cachedSetTimeout === defaultSetTimout || !cachedSetTimeout) && setTimeout) {
+        cachedSetTimeout = setTimeout;
+        return setTimeout(fun, 0);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedSetTimeout(fun, 0);
+    } catch(e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
+            return cachedSetTimeout.call(null, fun, 0);
+        } catch(e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
+            return cachedSetTimeout.call(this, fun, 0);
+        }
+    }
+
+
+}
+function runClearTimeout(marker) {
+    if (cachedClearTimeout === clearTimeout) {
+        //normal enviroments in sane situations
+        return clearTimeout(marker);
+    }
+    // if clearTimeout wasn't available but was latter defined
+    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
+        cachedClearTimeout = clearTimeout;
+        return clearTimeout(marker);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedClearTimeout(marker);
+    } catch (e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
+            return cachedClearTimeout.call(null, marker);
+        } catch (e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
+            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
+            return cachedClearTimeout.call(this, marker);
+        }
+    }
+
+
+
+}
+var queue = [];
+var draining = false;
+var currentQueue;
+var queueIndex = -1;
+
+function cleanUpNextTick() {
+    if (!draining || !currentQueue) {
+        return;
+    }
+    draining = false;
+    if (currentQueue.length) {
+        queue = currentQueue.concat(queue);
+    } else {
+        queueIndex = -1;
+    }
+    if (queue.length) {
+        drainQueue();
+    }
+}
+
+function drainQueue() {
+    if (draining) {
+        return;
+    }
+    var timeout = runTimeout(cleanUpNextTick);
+    draining = true;
+
+    var len = queue.length;
+    while(len) {
+        currentQueue = queue;
+        queue = [];
+        while (++queueIndex < len) {
+            if (currentQueue) {
+                currentQueue[queueIndex].run();
+            }
+        }
+        queueIndex = -1;
+        len = queue.length;
+    }
+    currentQueue = null;
+    draining = false;
+    runClearTimeout(timeout);
+}
+
+process.nextTick = function (fun) {
+    var args = new Array(arguments.length - 1);
+    if (arguments.length > 1) {
+        for (var i = 1; i < arguments.length; i++) {
+            args[i - 1] = arguments[i];
+        }
+    }
+    queue.push(new Item(fun, args));
+    if (queue.length === 1 && !draining) {
+        runTimeout(drainQueue);
+    }
+};
+
+// v8 likes predictible objects
+function Item(fun, array) {
+    this.fun = fun;
+    this.array = array;
+}
+Item.prototype.run = function () {
+    this.fun.apply(null, this.array);
+};
+process.title = 'browser';
+process.browser = true;
+process.env = {};
+process.argv = [];
+process.version = ''; // empty string to avoid regexp issues
+process.versions = {};
+
+function noop() {}
+
+process.on = noop;
+process.addListener = noop;
+process.once = noop;
+process.off = noop;
+process.removeListener = noop;
+process.removeAllListeners = noop;
+process.emit = noop;
+
+process.binding = function (name) {
+    throw new Error('process.binding is not supported');
+};
+
+process.cwd = function () { return '/' };
+process.chdir = function (dir) {
+    throw new Error('process.chdir is not supported');
+};
+process.umask = function() { return 0; };
+
+},{}],31:[function(require,module,exports){
 var typed = require('./typed');
 var leaflet = require('leaflet');
+var sampleData = require('./sampleData.json');
+
+var axios = require('axios');
 
 typed();
 
@@ -13260,14 +16764,282 @@ typed();
 var mymap = leaflet.map('hero-map', {
   attributionControl: false,
   zoomControl: false,
-}).setView([51.505, -0.09], 13);
+}).setView([35, -30], 3);
 
 leaflet.tileLayer('https://api.mapbox.com/styles/v1/mapbox/light-v9/tiles/256/{z}/{x}/{y}?access_token=pk.eyJ1Ijoic2FzaGltaWkiLCJhIjoiY2llc3pleTQ3MDBrcHFhbTNjbmRnZjdpbyJ9.DGX7v39rkSvNnH9SrOvUaw', {
     attribution: '',
     maxZoom: 18,
+    continuousWorld: false,
 }).addTo(mymap);
 
-},{"./typed":3,"leaflet":1}],3:[function(require,module,exports){
+// Define an icon called pulseRing
+var pulseRing = leaflet.divIcon({
+  // Specify a class name we can refer to in CSS.
+  className: 'pulse-ring',
+  html: '<div class="gps_ring"></div>'
+  // Set marker width and height
+  ,iconSize: [22,22]
+  // ,iconAnchor: [11,11]
+});
+
+var listOfLocations = {
+  toronto: [44.5, -79.5],
+  nyc: [40.5, -75.5],
+  uk: [53.5, 0],
+}
+//
+// Object.keys(listOfLocations).forEach((location) => {
+//   leaflet.marker(listOfLocations[location], {icon: pulseRing}).addTo(mymap);
+// });
+
+sampleData.features.forEach((feature) => {
+  leaflet.marker(feature.geometry.coordinates, {icon: pulseRing}).addTo(mymap);
+});
+
+},{"./sampleData.json":32,"./typed":33,"axios":1,"leaflet":29}],32:[function(require,module,exports){
+module.exports={ "type": "FeatureCollection", "features": [
+
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-91.5167, 14.8333] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Quetzaltenango, Departamento De Quetzaltenango, Guatemala", "urltone": -2.41, "url": "http://www.dca.gob.gt/index.php/nacional/item/58338-mides-entrega-80-quintales-de-banano-a-familias-con-desnutrici%C3%B3n-aguda", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": ";Ministry_To_Development;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_OFFICIALS;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.9384, 42.1497] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "New York, United States", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_OFFICIALS;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_OFFICIALS;", "mentionednames": ";United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Sudan", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_OFFICIALS;", "mentionednames": ";United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;FOOD_SECURITY;TAX_FNCACT_OFFICIALS;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";Nyalel_Gatcauk;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";John_Ging;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";Mourad_Wahba;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";John_Ging;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";Ugochi_Daniels;John_Ging;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.21, "url": "http://www.kenyastar.com/news/252857833/diseases-and-sexual-violence-threaten-somalis-south-sudanese-escaping-famine--un", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";Ugochi_Daniels;John_Ging;Fragile_Contexts_Branch;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-91.5167, 14.8333] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Quetzaltenango, Departamento De Quetzaltenango, Guatemala", "urltone": -2.41, "url": "http://www.dca.gob.gt/index.php/nacional/item/58338-mides-entrega-80-quintales-de-banano-a-familias-con-desnutrici%C3%B3n-aguda", "mentionedthemes": ";FOOD_SECURITY;", "mentionednames": ";Ministry_To_Health;Ministry_To_Agriculture;Cheek_National;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;EPU_ECONOMY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;EPU_ECONOMY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;EPU_ECONOMY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ECON_WORLDCURRENCIES_DOLLAR;ECON_WORLDCURRENCIES_US_DOLLAR;EPU_ECONOMY;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.9384, 42.1497] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "New York, United States", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;MEDIA_MSM;TAX_FNCACT_DIRECTOR;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": ";Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.9384, 42.1497] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "New York, United States", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;TAX_FNCACT_DIRECTOR;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": ";Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.9384, 42.1497] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "New York, United States", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";MEDIA_MSM;TAX_FNCACT_DIRECTOR;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": ";Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";MEDIA_MSM;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";DEMOCRACY;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.0000, 37.5664] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Seoul, Soul-T'ukpyolsi, South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";DEMOCRACY;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.0000, 40.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "North Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";DEMOCRACY;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Nigeria", "urltone": -7.53, "url": "http://www.voaafrique.com/a/en-images-la-malnutrition-a-diffa-/3815802.html", "mentionedthemes": ";TAX_FNCACT_ENVOY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 16.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Niger", "urltone": -7.53, "url": "http://www.voaafrique.com/a/en-images-la-malnutrition-a-diffa-/3815802.html", "mentionedthemes": ";TAX_FNCACT_ENVOY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ECON_WORLDCURRENCIES_DOLLAR;ECON_WORLDCURRENCIES_US_DOLLAR;EPU_ECONOMY;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ECON_WORLDCURRENCIES_DOLLAR;ECON_WORLDCURRENCIES_US_DOLLAR;TAX_WORLDMAMMALS_HUMAN;EPU_ECONOMY;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;EPU_ECONOMY;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;CRISISLEX_CRISISLEXREC;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_C03_WELLBEING_HEALTH;CRISISLEX_T02_INJURED;TAX_FNCACT_VICTIMS;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;TAX_FNCACT_WORKERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;CRISISLEX_C03_WELLBEING_HEALTH;CRISISLEX_T02_INJURED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;TAX_FNCACT_VICTIMS;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;CRISISLEX_CRISISLEXREC;TAX_FNCACT_WORKERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;CRISISLEX_C03_WELLBEING_HEALTH;CRISISLEX_T02_INJURED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;TAX_FNCACT_VICTIMS;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;CRISISLEX_CRISISLEXREC;TAX_FNCACT_WORKERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [36.6339, 35.9306] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Idlib, Idlib, Syria", "urltone": -0.87, "url": "http://www.gazeteuzay.com/besinci-kafile-cerablusa-ulasti-109067.html", "mentionedthemes": ";SELF_IDENTIFIED_HUMAN_RIGHTS;WB_2203_HUMAN_RIGHTS;TAX_WORLDMAMMALS_HUMAN;FOOD_SECURITY;RURAL;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";DEMOCRACY;ACT_FORCEPOSTURE;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";DEMOCRACY;ACT_FORCEPOSTURE;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";TAX_FNCACT_EDITOR;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";TAX_FNCACT_EDITOR;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.9384, 42.1497] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "New York, United States", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_DISEASE_CHOLERA;MEDIA_MSM;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_695_POVERTY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.2067, 15.3547] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Sanaa, San‘A', Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_695_POVERTY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": 1.19, "url": "http://www.yemenakhbar.com/writings/827866.html", "mentionedthemes": ";CRISISLEX_CRISISLEXREC;CRISISLEX_C07_SAFETY;MANMADE_DISASTER_IMPLIED;TAX_WORLDMAMMALS_HUMAN;CRISISLEX_T11_UPDATESSYMPATHY;TAX_ETHNICITY_HOUTHI;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MEDICAL;TAX_FNCACT_SURGEON;UNGP_FORESTS_RIVERS_OCEANS;TAX_FNCACT_ACTRESS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": 1.19, "url": "http://www.yemenakhbar.com/writings/827866.html", "mentionedthemes": ";USPEC_POLITICS_GENERAL1;EPU_POLICY_POLITICAL;EPU_POLICY_POLITICAL;TAX_WORLDMAMMALS_HUMAN;CRISISLEX_T11_UPDATESSYMPATHY;TAX_ETHNICITY_HOUTHI;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MEDICAL;TAX_FNCACT_SURGEON;TAX_FNCACT_ACTRESS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": 1.19, "url": "http://www.yemenakhbar.com/writings/827866.html", "mentionedthemes": ";USPEC_POLITICS_GENERAL1;EPU_POLICY_POLITICAL;EPU_POLICY_POLITICAL;TAX_ETHNICITY_HOUTHI;IDEOLOGY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MEDICAL;TAX_FNCACT_SURGEON;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_CRISISLEXREC;TAX_TERROR_GROUP_BOKO_HARAM;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_T11_UPDATESSYMPATHY;EPU_CATS_MIGRATION_FEAR_FEAR;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_T02_INJURED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;AFFECT;POVERTY;CRISISLEX_C05_NEED_OF_SHELTERS;TERROR;ARMEDCONFLICT;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.0000, 62.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Sweden", "urltone": -0.43, "url": "http://dagensbok.com/2017/04/19/om-var-farliga-langtan-tillbaka/", "mentionedthemes": ";AGRICULTURE;TAX_FOODSTAPLES_BARLEY;CRISISLEX_CRISISLEXREC;POVERTY;WB_695_POVERTY;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -1.00, "url": "http://barakish.net/news02.aspx?cat=12&sub=23&id=468531", "mentionedthemes": ";CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [125.7550, 39.0194] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Pyongyang, P'yongyang-Si, North Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;DEMOCRACY;AFFECT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-77.0364, 38.8951] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Washington, Washington, United States", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";CRISISLEX_CRISISLEXREC;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;DEMOCRACY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -1.00, "url": "http://www.barakish.net/news02.aspx?cat=12&sub=23&id=468531", "mentionedthemes": ";CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [105.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";ECON_WORLDCURRENCIES_DOLLARS;ECON_WORLDCURRENCIES_DOLLAR;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;TAX_ETHNICITY_ENGLISH;TAX_WORLDLANGUAGES_ENGLISH;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": ";Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;TAX_ETHNICITY_ENGLISH;TAX_WORLDLANGUAGES_ENGLISH;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": ";Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";ECON_WORLDCURRENCIES_DOLLARS;ECON_WORLDCURRENCIES_DOLLAR;AID_HUMANITARIAN;AFFECT;DISPLACED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Iraq", "urltone": -2.69, "url": "http://www.kitabat.com/ar/page/19/04/2017/97933/%D9%85%D8%A7%D8%B0%D8%A7-%D9%8A%D8%AD%D9%85%D9%84-%D8%A7%D9%84%D8%AD%D9%83%D9%8A%D9%85-%D9%84%D9%84%D8%AF%D9%88%D9%84-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%D8%9F%D8%9F%D8%9F.html", "mentionedthemes": ";FOOD_SECURITY;TAX_FNCACT_LEADERS;ARREST;ALLIANCE;EPU_POLICY_POLITICAL;SOC_GENERALCRIME;", "mentionednames": ";Alliance_National;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.0000, 62.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Sweden", "urltone": -4.09, "url": "http://informe21.com/politica/millan-an-citara-empresas-que-han-cotratado-compromisos-con-el-gobierno", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ENV_OIL;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";ECON_WORLDCURRENCIES_DOLLAR;AID_HUMANITARIAN;AFFECT;DISPLACED;ECON_WORLDCURRENCIES_DOLLARS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";ECON_WORLDCURRENCIES_DOLLAR;AID_HUMANITARIAN;AFFECT;DISPLACED;ECON_WORLDCURRENCIES_DOLLARS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";KILL;CRISISLEX_T03_DEAD;EPU_ECONOMY_HISTORIC;CRISISLEX_CRISISLEXREC;TAX_TERROR_GROUP_BOKO_HARAM;EPU_CATS_MIGRATION_FEAR_FEAR;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_T02_INJURED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;AFFECT;POVERTY;CRISISLEX_C05_NEED_OF_SHELTERS;TERROR;ARMEDCONFLICT;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";TAX_DISEASE_CHOLERA;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_CHOLERA;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";MEDIA_MSM;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_CHOLERA;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;SOC_POINTSOFINTEREST_HEADQUARTERS;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Sudan", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_T04_INFRASTRUCTURE;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-92.3809, 34.9513] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Arkansas, United States", "urltone": 0.20, "url": "http://www.arkansasmatters.com:80/news/local-news/tacos-4-life-franchise-to-open-in-searcy/693760990", "mentionedthemes": ";MOVEMENT_GENERAL;WB_2670_JOBS;WB_696_PUBLIC_SECTOR_MANAGEMENT;WB_2048_COMPENSATION_CAREERS_AND_INCENTIVES;WB_723_PUBLIC_ADMINISTRATION;WB_724_HUMAN_RESOURCES_FOR_PUBLIC_SECTOR;TAX_FNCACT_CHILDREN;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";Ashton_Samuelson;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;TAX_FNCACT_OFFICIAL;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;TAX_FNCACT_DIRECTOR;CRISISLEX_CRISISLEXREC;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": ";Un_Development_Programme;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;AID_HUMANITARIAN;TAX_FNCACT_OFFICIAL;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";TAX_ETHNICITY_SOMALI;TAX_WORLDLANGUAGES_SOMALI;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;AID_HUMANITARIAN;TAX_FNCACT_OFFICIAL;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": ";Mourad_Wahba;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [17.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Libya", "urltone": -5.11, "url": "http://www.japantimes.co.jp/news/2017/04/19/world/social-issues-world/facing-threat-patrols-thousands-migrants-fleeing-libya-28-found-dead/", "mentionedthemes": ";EPU_CATS_MIGRATION_FEAR_MIGRATION;TRIAL;TAX_FNCACT_PROSECUTOR;SMUGGLING;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;ARMEDCONFLICT;WB_2462_POLITICAL_VIOLENCE_AND_WAR;GENERAL_GOVERNMENT;", "mentionednames": ";Carmelo_Zuccaro;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.85, "url": "http://www.lapatilla.com/site/2017/04/18/manchados-en-sangre-por-luis-eduardo-martinez/", "mentionedthemes": ";FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ETHNICITY_VENEZUELANS;USPEC_POLITICS_GENERAL1;WB_137_WATER;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;TAX_ETHNICITY_VENEZUELAN;AFFECT;", "mentionednames": ";Thomas_Jefferson;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.85, "url": "http://www.lapatilla.com/site/2017/04/18/manchados-en-sangre-por-luis-eduardo-martinez/", "mentionedthemes": ";FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ETHNICITY_VENEZUELANS;USPEC_POLITICS_GENERAL1;WB_137_WATER;TAX_ETHNICITY_VENEZUELAN;AFFECT;", "mentionednames": ";Thomas_Jefferson;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -8.24, "url": "http://www.diariolasamericas.com/opinion/maduro-busca-confundir-al-mundo-n4119980", "mentionedthemes": ";GENERAL_GOVERNMENT;FOOD_SECURITY;EXTREMISM;UNGP_POLITICAL_FREEDOMS;TAX_FNCACT_CHILDREN;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": 1.71, "url": "http://www.promptnewsonline.com/adeosun-washington-dc-world-bank-spring-meetings/", "mentionedthemes": ";ECON_DEVELOPMENTORGS_WORLD_BANK;AGRICULTURE;EPU_POLICY_DEFICIT;TAX_FNCACT_MINISTER;USPEC_POLICY1;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": ";World_Bank;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-102.0000, 23.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Mexico", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";FOOD_STAPLE;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-76.0000, -10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Peru", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";FOOD_STAPLE;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-102.0000, 23.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Mexico", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";FOOD_STAPLE;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_CRISISLEXREC;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;DEMOCRACY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_CRISISLEXREC;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;DEMOCRACY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [127.5000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Korea", "urltone": -1.83, "url": "http://www.alittihad.ae/wajhatdetails.php?id=93906", "mentionedthemes": ";TAX_FNCACT_TROOPS;DEMOCRACY;ACT_FORCEPOSTURE;AFFECT;APPOINTMENT;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_OFFICIALS;", "mentionednames": ";Jimmy_Carter;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";AGRICULTURE;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;UNGP_FORESTS_RIVERS_OCEANS;WB_695_POVERTY;EPU_ECONOMY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_695_POVERTY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_695_POVERTY;USPEC_POLICY1;USPEC_POLICY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_137_WATER;WB_137_WATER;WB_137_WATER;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [112.3190, 22.6957] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Guyuan, Guangdong, China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2670_JOBS;WB_2815_SKILLS_AND_EDUCATION;WB_2769_JOBS_STRATEGIES;WB_2817_TRAINING_PROGRAMS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [105.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2670_JOBS;WB_2815_SKILLS_AND_EDUCATION;WB_2769_JOBS_STRATEGIES;WB_2817_TRAINING_PROGRAMS;ECON_WORLDCURRENCIES_DOLLARS;ECON_WORLDCURRENCIES_DOLLAR;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [105.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2670_JOBS;WB_2815_SKILLS_AND_EDUCATION;WB_2769_JOBS_STRATEGIES;WB_2817_TRAINING_PROGRAMS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [110.0830, 33.7844] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Baiyangdian, Shaanxi, China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2670_JOBS;WB_2815_SKILLS_AND_EDUCATION;WB_2769_JOBS_STRATEGIES;WB_2817_TRAINING_PROGRAMS;ECON_WORLDCURRENCIES_DOLLARS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;CRISISLEX_CRISISLEXREC;TAX_ETHNICITY_ENGLISH;TAX_WORLDLANGUAGES_ENGLISH;TAX_FNCACT_DIRECTOR;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": ";John_Ging;Operational_Division;Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [106.0000, 37.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Ningxia, Ningxia, China", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WB_2670_JOBS;WB_2815_SKILLS_AND_EDUCATION;WB_2769_JOBS_STRATEGIES;WB_2817_TRAINING_PROGRAMS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;MANMADE_DISASTER_IMPLIED;PUBLIC_TRANSPORT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Venezuela", "urltone": -7.12, "url": "http://www.taringa.net/posts/noticias/19847895/Venezuela-un-regimen-enriquecido-en-un-pais-empobrecido.html", "mentionedthemes": ";NATURAL_DISASTER_DROUGHTS;POVERTY;GENERAL_GOVERNMENT;FOOD_SECURITY;CRIME_LOOTING;TAX_ETHNICITY_VENEZUELAN;TAX_ETHNICITY_VENEZUELAN;LEADER;TAX_FNCACT_PRESIDENTS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Iraq", "urltone": -2.69, "url": "http://www.kitabat.com/ar/page/19/04/2017/97933/%D9%85%D8%A7%D8%B0%D8%A7-%D9%8A%D8%AD%D9%85%D9%84-%D8%A7%D9%84%D8%AD%D9%83%D9%8A%D9%85-%D9%84%D9%84%D8%AF%D9%88%D9%84-%D8%A7%D9%84%D8%B9%D8%B1%D8%A8%D9%8A%D8%A9%D8%9F%D8%9F%D8%9F.html", "mentionedthemes": ";FOOD_SECURITY;SOC_SUICIDE;ARREST;ALLIANCE;EPU_POLICY_POLITICAL;SOC_GENERALCRIME;TAX_FNCACT_POLITICIAN;TAX_FNCACT_POLITICIAN;", "mentionednames": ";Alliance_National;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [122.0000, 13.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Philippines", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";TAX_WORLDLANGUAGES_ARABIC;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [114.1670, 22.2500] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Hong Kong", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";TAX_WORLDLANGUAGES_ARABIC;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [100.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Thailand", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";TAX_WORLDLANGUAGES_ARABIC;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [103.8000, 1.3667] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Singapore", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";TAX_WORLDLANGUAGES_ARABIC;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [112.5000, 2.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Malaysia", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";TAX_WORLDLANGUAGES_ARABIC;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.09, "url": "http://informe21.com/politica/millan-an-citara-empresas-que-han-cotratado-compromisos-con-el-gobierno", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ENV_OIL;CORRUPTION;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.09, "url": "http://informe21.com/politica/millan-an-citara-empresas-que-han-cotratado-compromisos-con-el-gobierno", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ENV_OIL;CORRUPTION;KILL;CRISISLEX_CRISISLEXREC;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.09, "url": "http://informe21.com/politica/millan-an-citara-empresas-que-han-cotratado-compromisos-con-el-gobierno", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ENV_OIL;CORRUPTION;KILL;CRISISLEX_CRISISLEXREC;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";TAX_FNCACT_DIRECTOR;SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";MEDIA_MSM;TAX_FNCACT_DIRECTOR;SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";TAX_FNCACT_DIRECTOR;SHORTAGE;GENERAL_HEALTH;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;TAX_ETHNICITY_HOUTHIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_RELIGION_SHIITE;TAX_ETHNICITY_SHIITE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_COORDINATOR;TAX_AIDGROUPS_UNICEF;TAX_AIDGROUPS_UNICEF;KILL;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Saudi Arabia", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;TAX_ETHNICITY_HOUTHIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_RELIGION_SHIITE;TAX_ETHNICITY_SHIITE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";TAX_FNCACT_DIRECTOR;SHORTAGE;GENERAL_HEALTH;TAX_FNCACT_EDITOR;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";TAX_FNCACT_DIRECTOR;SHORTAGE;GENERAL_HEALTH;TAX_FNCACT_EDITOR;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;", "mentionednames": ";John_Ging;Operational_Division;Xinhua;Xinhua;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Yemen", "urltone": -8.08, "url": "http://www.nigeriatoday.ng/2017/04/children-are-dying-thecable/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SUDANESE;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": ";Un_Un_News_Centre;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -8.08, "url": "http://www.nigeriatoday.ng/2017/04/children-are-dying-thecable/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SUDANESE;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_FNCACT_CHILDREN;", "mentionednames": ";Un_Un_News_Centre;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Sudan", "urltone": -8.08, "url": "http://www.nigeriatoday.ng/2017/04/children-are-dying-thecable/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SUDANESE;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_FNCACT_CHILDREN;", "mentionednames": ";Un_Un_News_Centre;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -8.08, "url": "http://www.nigeriatoday.ng/2017/04/children-are-dying-thecable/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SUDANESE;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": ";Un_Un_News_Centre;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "South Sudan", "urltone": -8.08, "url": "http://www.nigeriatoday.ng/2017/04/children-are-dying-thecable/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_678_DIGITAL_GOVERNMENT;WB_694_BROADCAST_AND_MEDIA;WB_133_INFORMATION_AND_COMMUNICATION_TECHNOLOGIES;KILL;CRISISLEX_T03_DEAD;TAX_ETHNICITY_SUDANESE;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": ";Un_Un_News_Centre;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Sudan", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Somalia", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;MEDIA_MSM;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "South Sudan", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;GENDER_VIOLENCE;RAPE;WB_742_YOUTH_AND_GENDER_BASED_VIOLENCE;WB_2443_RAPE_AND_SEXUAL_VIOLENCE;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;TAX_ETHNICITY_SOMALIS;TAX_WORLDLANGUAGES_SOMALIS;TAX_AIDGROUPS_THE_COORDINATION_OF_HUMANITARIAN_AFFAIRS;MEDIA_MSM;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";John_Ging;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Somalia", "urltone": -4.73, "url": "http://english.sina.com/news/2017-04-19/detail-ifyeifqx6356698.shtml", "mentionedthemes": ";WATER_SECURITY;NATURAL_DISASTER_DROUGHT;CRISISLEX_T09_DISPLACEDRELOCATEDEVACUATED;AFFECT;DISPLACED;TAX_DISEASE_MEASLES;UNGP_HEALTHCARE;TAX_DISEASE_CHOLERA;CRISISLEX_CRISISLEXREC;AID_HUMANITARIAN;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_T01_CAUTION_ADVICE;UNREST_BELLIGERENT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -6.00, "url": "https://www.newsghana.com.gh/somalia-south-sudan-in-peril-of-famine-expert/", "mentionedthemes": ";AID_HUMANITARIAN;WATER_SECURITY;NATURAL_DISASTER_DROUGHT;CRISISLEX_T09_DISPLACEDRELOCATEDEVACUATED;AFFECT;DISPLACED;TAX_DISEASE_MEASLES;UNGP_HEALTHCARE;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_CHOLERA;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;CRISISLEX_T01_CAUTION_ADVICE;UNREST_BELLIGERENT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -5.85, "url": "http://news.xinhuanet.com/english/2017-04/19/c_136218828.htm", "mentionedthemes": ";AID_HUMANITARIAN;WATER_SECURITY;NATURAL_DISASTER_DROUGHT;CRISISLEX_T09_DISPLACEDRELOCATEDEVACUATED;AFFECT;DISPLACED;TAX_DISEASE_MEASLES;UNGP_HEALTHCARE;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_DISEASE_CHOLERA;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_CRISISLEXREC;CRISISLEX_T01_CAUTION_ADVICE;UNREST_BELLIGERENT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Sudan", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;BORDER;ECON_WORLDCURRENCIES_DOLLARS;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;", "mentionednames": ";Bob_Corker;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;CRISISLEX_T04_INFRASTRUCTURE;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-85.0000, 13.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Nicaragua", "urltone": 2.30, "url": "http://www.asamblea.gob.ni/359179/realizaran-digesto-juridico-en-materia-de-equidad-e-igualdad-de-genero/", "mentionedthemes": ";SOVEREIGNTY;TAX_FNCACT_DEPUTY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;LEADER;TAX_FNCACT_PRESIDENT;USPEC_POLITICS_GENERAL1;TAX_FNCACT_AUTHORITIES;CRISISLEX_CRISISLEXREC;EPU_POLICY_AUTHORITIES;", "mentionednames": ";A_Assembly_National;Sector_Energy;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.0000, 62.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Sweden", "urltone": -0.43, "url": "http://dagensbok.com/2017/04/19/om-var-farliga-langtan-tillbaka/", "mentionedthemes": ";AGRICULTURE;CRISISLEX_CRISISLEXREC;POVERTY;WB_695_POVERTY;POVERTY;WB_695_POVERTY;WB_2670_JOBS;WB_2769_JOBS_STRATEGIES;WB_2844_EMIGRATION;WB_2836_MIGRATION_POLICIES_AND_JOBS;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";August_Strindberg;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Syria", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;ARREST;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [11.9667, 57.7167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Gothenburg, Vastra Gotalands Lan, Sweden", "urltone": 3.54, "url": "http://www.swedenabroad.com/en-GB/Embassies/Belgrade/Current-affairs/News/Green-and-Clean--Food-for-Tomorrow-sys/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_REPRESENTATIVES;TAX_FNCACT_FARMERS;URBAN;URBAN;EPU_ECONOMY_HISTORIC;AGRICULTURE;AGRICULTURE;", "mentionednames": ";Jonas_Lindh;Jonas_Lindh;Nova_Iskra;William_Bailey;William_Bailey;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Iraq", "urltone": -6.05, "url": "https://www.usatoday.com/picture-gallery/news/world/2016/10/22/mosul-offensive-is-displacing-many-iraqis/92615448/", "mentionedthemes": ";TAX_FNCACT_WOMEN;CRISISLEX_C07_SAFETY;SEIGE;CHECKPOINT;UNREST_CHECKPOINT;SEIGE;CHECKPOINT;UNREST_CHECKPOINT;SEIGE;CHECKPOINT;UNREST_CHECKPOINT;WB_2433_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";Maya_Alleruzzo;Bram_Janssen;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [76.6667, 33.9167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Kashmir, Jammu And Kashmir, India", "urltone": 1.69, "url": "http://kashmirreader.com/2017/04/19/31st-skuast-k-university-council-meeting/", "mentionedthemes": ";AGRICULTURE;TAX_FOODSTAPLES_RICE;TAX_ECON_PRICE;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_2670_JOBS;WB_2769_JOBS_STRATEGIES;WB_2840_INTEGRATION;WB_2836_MIGRATION_POLICIES_AND_JOBS;TAX_FNCACT_MINISTER;EDUCATION;SOC_POINTSOFINTEREST_UNIVERSITY;", "mentionednames": ";Rajiv_Gandhi;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [76.6667, 33.9167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Kashmir, Jammu And Kashmir, India", "urltone": 1.69, "url": "http://kashmirreader.com/2017/04/19/31st-skuast-k-university-council-meeting/", "mentionedthemes": ";TAX_FOODSTAPLES_RICE;TAX_ECON_PRICE;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_2670_JOBS;WB_2769_JOBS_STRATEGIES;WB_2840_INTEGRATION;WB_2836_MIGRATION_POLICIES_AND_JOBS;EDUCATION;SOC_POINTSOFINTEREST_UNIVERSITY;", "mentionednames": ";Rajiv_Gandhi;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [74.8667, 32.7333] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Jammu, Jammu And Kashmir, India", "urltone": 1.69, "url": "http://kashmirreader.com/2017/04/19/31st-skuast-k-university-council-meeting/", "mentionedthemes": ";TAX_FOODSTAPLES_RICE;TAX_ECON_PRICE;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_2670_JOBS;WB_2769_JOBS_STRATEGIES;WB_2840_INTEGRATION;WB_2836_MIGRATION_POLICIES_AND_JOBS;EDUCATION;SOC_POINTSOFINTEREST_UNIVERSITY;", "mentionednames": ";Rajiv_Gandhi;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [17.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Libya", "urltone": -5.11, "url": "http://www.japantimes.co.jp/news/2017/04/19/world/social-issues-world/facing-threat-patrols-thousands-migrants-fleeing-libya-28-found-dead/", "mentionedthemes": ";EPU_CATS_MIGRATION_FEAR_MIGRATION;TRIAL;TAX_FNCACT_PROSECUTOR;TAX_FNCACT_CHIEF;SMUGGLING;SMUGGLING;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;ARMEDCONFLICT;WB_2462_POLITICAL_VIOLENCE_AND_WAR;GENERAL_GOVERNMENT;", "mentionednames": ";Carmelo_Zuccaro;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.0000, 62.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Sweden", "urltone": -8.24, "url": "http://www.diariolasamericas.com/opinion/maduro-busca-confundir-al-mundo-n4119980", "mentionedthemes": ";WB_845_LEGAL_AND_REGULATORY_FRAMEWORK;WB_696_PUBLIC_SECTOR_MANAGEMENT;WB_962_INTERNATIONAL_LAW;LEGISLATION;EPU_POLICY_LAW;TAX_POLITICAL_PARTY_DEMOCRATS;USPEC_POLITICS_GENERAL1;FOOD_SECURITY;UNGP_POLITICAL_FREEDOMS;TAX_FNCACT_CHILDREN;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";Al_International_Law;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Nigeria", "urltone": -2.42, "url": "http://thenewsnigeria.com.ng/2017/04/un-commends-fg-on-economic-recovery-plan/", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;TAX_ECON_PRICE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_WORLDMAMMALS_HUMAN;TAX_FNCACT_REPRESENTATIVE;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;CRISISLEX_CRISISLEXREC;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;CRISISLEX_CRISISLEXREC;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": ";Human_Development_Index;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -3.92, "url": "http://www.estrategiaynegocios.net/lasclavesdeldia/1063507-330/fmi-inflaci%C3%B3n-de-venezuela-ser%C3%A1-de-720-en-2017-y-2068-en", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;USPEC_POLICY1;ENV_OIL;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;LEADER;TAX_FNCACT_PRESIDENT;USPEC_POLITICS_GENERAL1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-72.0000, 4.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Colombia", "urltone": -4.63, "url": "http://informe21.com/politica/opositores-y-chavistas-marcharan-entre-temores-de-violencia", "mentionedthemes": ";ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;FOOD_SECURITY;SHORTAGE;TAX_ETHNICITY_VENEZUELANS;USPEC_POLITICS_GENERAL1;ENV_OIL;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;ECON_BUDGET_DEFICIT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -4.63, "url": "http://informe21.com/politica/opositores-y-chavistas-marcharan-entre-temores-de-violencia", "mentionedthemes": ";ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ELECTION;FOOD_SECURITY;SHORTAGE;TAX_FNCACT_GOVERNORS;TAX_ETHNICITY_VENEZUELANS;USPEC_POLITICS_GENERAL1;TAX_FNCACT_ANALYSTS;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ENV_OIL;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;ECON_BUDGET_DEFICIT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.0833, 4.6000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Bogota, Cundinamarca, Colombia", "urltone": -3.46, "url": "https://www.debate.com.mx/mundo/Indignante-durante-12-anos-fue-maltratado-por-su-madre-20170418-0228.html", "mentionedthemes": ";AFFECT;GENERAL_HEALTH;FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_CHILD;ARREST;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_FNCACT_AUTHORITIES;CRISISLEX_CRISISLEXREC;EPU_POLICY_AUTHORITIES;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Sudan", "urltone": 2.43, "url": "http://apanews.net/fr/news/le-soudan-en-campagne-de-charme-pour-attirer-les-investisseurs-emiratis-et-coreens", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;EPU_ECONOMY_HISTORIC;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;TAX_ECON_PRICE;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_175_FERTILIZERS;WB_174_CROP_PRODUCTION;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1949_CLIMATE_SMART_AGRICULTURE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Sudan", "urltone": 2.43, "url": "http://apanews.net/fr/news/le-soudan-en-campagne-de-charme-pour-attirer-les-investisseurs-emiratis-et-coreens", "mentionedthemes": ";ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;TAX_ECON_PRICE;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "South Sudan", "urltone": 2.43, "url": "http://apanews.net/fr/news/le-soudan-en-campagne-de-charme-pour-attirer-les-investisseurs-emiratis-et-coreens", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;EPU_ECONOMY_HISTORIC;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;TAX_ECON_PRICE;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_175_FERTILIZERS;WB_174_CROP_PRODUCTION;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1949_CLIMATE_SMART_AGRICULTURE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Venezuela", "urltone": -4.88, "url": "http://www.elimpulso.com/featured/fmi-2-068-podria-ubicarse-la-inflacion-venezuela-2018", "mentionedthemes": ";USPEC_POLICY1;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Venezuela", "urltone": -4.88, "url": "http://www.elimpulso.com/featured/fmi-2-068-podria-ubicarse-la-inflacion-venezuela-2018", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;USPEC_POLICY1;ENV_OIL;SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;LEADER;TAX_FNCACT_PRESIDENT;USPEC_POLITICS_GENERAL1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-102.0000, 23.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Mexico", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";FOOD_STAPLE;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_FOODSTAPLES_BREAD;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;TAX_FOODSTAPLES_WHEAT;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-4.0000, 40.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Spain", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";FOOD_STAPLE;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;WB_2936_GOLD;WB_507_ENERGY_AND_EXTRACTIVES;WB_895_MINING_SYSTEMS;WB_1699_METAL_ORE_MINING;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Nigeria", "urltone": -5.48, "url": "https://www.thecable.ng/children-are-dying", "mentionedthemes": ";TAX_DISEASE_ANOMALY;TAX_FNCACT_LEADERS;KILL;CRISISLEX_T03_DEAD;TAX_FNCACT_GOVERNORS;WB_695_POVERTY;EPU_POLICY_POLITICAL;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-5.8136, 35.7806] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Tangier, Tanger-T�Uan, Morocco", "urltone": -2.49, "url": "http://www.elnahar-news.com/world/357684.html", "mentionedthemes": ";RURAL;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;WATER_SECURITY;NATURAL_DISASTER_DROUGHT;TAX_WORLDMAMMALS_GOATS;TAX_RELIGION_ISLAMIC;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;USPEC_POLICY1;EPU_POLICY_POLICY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;WB_698_TRADE;", "mentionednames": ";Express;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Iraq", "urltone": -5.24, "url": "http://www.kitabat.com/ar/page/19/04/2017/97925/%D8%A3%D9%85%D8%B1%D9%8A%D9%83%D8%A7-%D9%84%D9%86-%D8%AA%D8%B6%D8%B1%D8%A8-%D9%84%D8%A7-%D9%83%D9%88%D8%B1%D9%8A%D8%A7-%D9%88%D9%84%D8%A7-%D8%A5%D9%8A%D8%B1%D8%A7%D9%86.html", "mentionedthemes": ";BLOCKADE;SEIGE;TAX_FNCACT_SLAVE;SOC_SLAVERY;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;ARMEDCONFLICT;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;WB_2462_POLITICAL_VIOLENCE_AND_WAR;EPU_CATS_MIGRATION_FEAR_FEAR;WMD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [133.0000, -27.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Australia", "urltone": 2.00, "url": "http://www.westernmagazine.com.au/story/4597508/love-for-ag-drives-rebecca/?cs=4190", "mentionedthemes": ";AGRICULTURE;AGRICULTURE;RURAL;EPU_ECONOMY_HISTORIC;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_STUDENT;WB_1950_AGRICULTURE_TECHNOLOGY;WB_1949_CLIMATE_SMART_AGRICULTURE;WB_197_AGRICULTURAL_RESEARCH;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Saudi Arabia", "urltone": 4.38, "url": "http://saudigazette.com.sa/business/saudi-agriculture-sector-witnesses-major-changes-meet-preset-objectives/", "mentionedthemes": ";CRISISLEX_T04_INFRASTRUCTURE;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Saudi Arabia", "urltone": 4.38, "url": "http://saudigazette.com.sa/business/saudi-agriculture-sector-witnesses-major-changes-meet-preset-objectives/", "mentionedthemes": ";CRISISLEX_T04_INFRASTRUCTURE;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;SLFID_ECONOMIC_DEVELOPMENTAID;", "mentionednames": ";Ministry_Of_Environment;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Saudi Arabia", "urltone": 4.38, "url": "http://saudigazette.com.sa/business/saudi-agriculture-sector-witnesses-major-changes-meet-preset-objectives/", "mentionedthemes": ";CRISISLEX_T04_INFRASTRUCTURE;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Saudi Arabia", "urltone": 4.38, "url": "http://saudigazette.com.sa/business/saudi-agriculture-sector-witnesses-major-changes-meet-preset-objectives/", "mentionedthemes": ";CRISISLEX_T04_INFRASTRUCTURE;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;SLFID_ECONOMIC_DEVELOPMENTAID;", "mentionednames": ";Ministry_Of_Environment;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [46.7728, 24.6408] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Riyadh, Ar Riya?, Saudi Arabia", "urltone": 4.38, "url": "http://saudigazette.com.sa/business/saudi-agriculture-sector-witnesses-major-changes-meet-preset-objectives/", "mentionedthemes": ";CRISISLEX_T04_INFRASTRUCTURE;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [77.0000, 20.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "India", "urltone": -1.42, "url": "http://www.business-standard.com/article/economy-policy/imd-s-normal-monsoon-forecast-lifts-business-sentiment-117041800539_1.html", "mentionedthemes": ";RURAL;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;AGRICULTURE;", "mentionednames": ";India_Meteorological_Department;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [70.0000, -10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Indian Ocean, Oc, ", "urltone": -1.42, "url": "http://www.business-standard.com/article/economy-policy/imd-s-normal-monsoon-forecast-lifts-business-sentiment-117041800539_1.html", "mentionedthemes": ";ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;TAX_ETHNICITY_INDIAN;USPEC_POLICY1;EPU_ECONOMY;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": ";Indian_Ocean;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;TAX_ETHNICITY_HOUTHIS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;ENV_OIL;TAX_RELIGION_SHIITE;TAX_ETHNICITY_SHIITE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;WOUND;CRISISLEX_C03_WELLBEING_HEALTH;CRISISLEX_T02_INJURED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;ENV_OIL;TAX_RELIGION_SHIITE;TAX_ETHNICITY_SHIITE;TAX_ETHNICITY_ARAB;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILD;TAX_FNCACT_COORDINATOR;TAX_AIDGROUPS_UNICEF;TAX_AIDGROUPS_UNICEF;AFFECT;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;TAX_FNCACT_COORDINATOR;TAX_AIDGROUPS_UNICEF;TAX_AIDGROUPS_UNICEF;AFFECT;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Yemen", "urltone": 1.19, "url": "http://www.yemenakhbar.com/writings/827866.html", "mentionedthemes": ";TAX_FNCACT_LEADERS;TAX_FNCACT_PRESIDENT;USPEC_POLITICS_GENERAL1;EPU_POLICY_POLITICAL;EPU_POLICY_POLITICAL;EPU_POLICY_POLITICAL;EPU_POLICY_POLITICAL;TAX_ETHNICITY_HOUTHI;IDEOLOGY;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [49.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Somalia", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Nigeria", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;TAX_FNCACT_SENATOR;TAX_ETHNICITY_AMERICAN;TAX_FNCACT_CHAIRPERSON;LEADER;TAX_FNCACT_PRESIDENT;DEMOCRACY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;SLFID_ECONOMIC_DEVELOPMENTAID;CRISISLEX_T07_SERVICESNEEDEDOFFERED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_VICTIMS;CRISISLEX_CRISISLEXREC;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;TAX_POLITICAL_PARTY_REPUBLICAN;", "mentionednames": ";Chris_Coons;Donald_Trump;Senate_Foreign_Relations_Committee;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "South Sudan", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;ECON_WORLDCURRENCIES_DOLLARS;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;TAX_FOODSTAPLES_CEREALS;WB_1609_FOOD_AND_IN_KIND_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_1618_FOOD_DISTRIBUTION;WB_697_SOCIAL_PROTECTION_AND_LABOR;SELF_IDENTIFIED_HUMANITARIAN_CRISIS;USPEC_UNCERTAINTY1;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_ETHNICITY_SUDANESE;TAX_ETHNICITY_SUDANESE;TAX_FOODSTAPLES_CORN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [36.3000, 33.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Damascus, Dimashq, Syria", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;ARREST;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-95.0000, 60.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Canada", "urltone": 0.68, "url": "http://www.obj.ca/index.php/article/bank-canada-warns-workforce-automation-could-intensify-income-inequality", "mentionedthemes": ";AGRICULTURE;WB_2433_CONFLICT_AND_VIOLENCE;WB_2465_REVOLUTIONARY_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;WB_2462_POLITICAL_VIOLENCE_AND_WAR;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;EDUCATION;SCIENCE;SOC_INNOVATION;TAX_FNCACT_WORKERS;USPEC_POLICY1;EPU_POLICY_POLICYMAKERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [13.0000, 55.6167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Frihamnen, Skane Lan, Sweden", "urltone": 3.54, "url": "http://www.swedenabroad.com/en-GB/Embassies/Belgrade/Current-affairs/News/Green-and-Clean--Food-for-Tomorrow-sys/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_REPRESENTATIVES;TAX_FNCACT_FARMERS;ENV_CLIMATECHANGE;WB_567_CLIMATE_CHANGE;CRISISLEX_CRISISLEXREC;UNGP_CLIMATE_CHANGE_ACTION;URBAN;URBAN;EPU_ECONOMY_HISTORIC;AGRICULTURE;AGRICULTURE;", "mentionednames": ";Jonas_Lindh;Jonas_Lindh;Nova_Iskra;William_Bailey;William_Bailey;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Venezuela", "urltone": -6.97, "url": "http://www.washingtontimes.com/news/2017/apr/18/nicolas-maduro-puts-venezuela-military-on-streets-/", "mentionedthemes": ";CRISISLEX_T11_UPDATESSYMPATHY;GENERAL_HEALTH;FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;EPU_CATS_MIGRATION_FEAR_FEAR;SOC_GENERALCRIME;TAX_RELIGION_CHURCH;KILL;CRISISLEX_T03_DEAD;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-60.6667, 2.8167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Boavista, Roraima, Brazil", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;TAX_FNCACT_PUBLIC_DEFENDER;WB_942_ACCESS_TO_JUSTICE;FOOD_SECURITY;PUBLIC_TRANSPORT;TAX_FNCACT_GUARD;TAX_ETHNICITY_INDIGENOUS;ETH_INDIGINOUS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-55.0000, -10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Brazil", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;TAX_FNCACT_PUBLIC_DEFENDER;WB_942_ACCESS_TO_JUSTICE;FOOD_SECURITY;PUBLIC_TRANSPORT;TAX_FNCACT_GUARD;TAX_ETHNICITY_INDIGENOUS;ETH_INDIGINOUS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";TAX_FNCACT_OFFICERS;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;FOOD_SECURITY;PUBLIC_TRANSPORT;TAX_ETHNICITY_INDIGENOUS;ETH_INDIGINOUS;TAX_ETHNICITY_VENEZUELAN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_FNCACT_PUBLIC_DEFENDER;WB_942_ACCESS_TO_JUSTICE;FOOD_SECURITY;TAX_FNCACT_GUARD;TAX_ETHNICITY_INDIGENOUS;ETH_INDIGINOUS;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";TAX_FNCACT_OFFICERS;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;FOOD_SECURITY;PUBLIC_TRANSPORT;TAX_FNCACT_GUARD;TAX_ETHNICITY_INDIGENOUS;ETH_INDIGINOUS;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";TAX_FNCACT_OFFICERS;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;FOOD_SECURITY;TAX_FNCACT_AUTHORITIES;EPU_POLICY_AUTHORITIES;LEGISLATION;EPU_POLICY_LAW;PUBLIC_TRANSPORT;TAX_ETHNICITY_VENEZUELAN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -3.92, "url": "http://www.estrategiaynegocios.net/lasclavesdeldia/1063507-330/fmi-inflaci%C3%B3n-de-venezuela-ser%C3%A1-de-720-en-2017-y-2068-en", "mentionedthemes": ";USPEC_POLICY1;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [17.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Libya", "urltone": -6.77, "url": "http://www.wattan.tv/news/202794.html", "mentionedthemes": ";IMMIGRATION;TAX_FNCACT_IMMIGRANTS;IMMIGRATION;TAX_FNCACT_IMMIGRANTS;IMMIGRATION;TAX_FNCACT_IMMIGRANTS;MARITIME_INCIDENT;MARITIME;UNGP_FORESTS_RIVERS_OCEANS;KILL;UNGP_FORESTS_RIVERS_OCEANS;MANMADE_DISASTER_IMPLIED;TAX_FNCACT_FISHERMEN;TAX_FNCACT_ADMINISTRATOR;CRISISLEX_T03_DEAD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";A_Europe_Sea;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [17.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Libya", "urltone": -6.77, "url": "http://www.wattan.tv/news/202794.html", "mentionedthemes": ";IMMIGRATION;TAX_FNCACT_IMMIGRANTS;IMMIGRATION;TAX_FNCACT_IMMIGRANTS;IMMIGRATION;TAX_FNCACT_IMMIGRANTS;MARITIME_INCIDENT;MARITIME;UNGP_FORESTS_RIVERS_OCEANS;KILL;UNGP_FORESTS_RIVERS_OCEANS;MANMADE_DISASTER_IMPLIED;TAX_FNCACT_FISHERMEN;TAX_FNCACT_ADMINISTRATOR;CRISISLEX_T03_DEAD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";Muammar_Gaddafi;A_Europe_Sea;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [17.0000, 25.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Libya", "urltone": -6.77, "url": "http://www.wattan.tv/news/202794.html", "mentionedthemes": ";IMMIGRATION;TAX_FNCACT_IMMIGRANTS;IMMIGRATION;TAX_FNCACT_IMMIGRANTS;MARITIME_INCIDENT;MARITIME;UNGP_FORESTS_RIVERS_OCEANS;KILL;CRISISLEX_C07_SAFETY;TAX_MILITARY_TITLE_COMMANDER;TAX_FNCACT_COMMANDER;UNGP_FORESTS_RIVERS_OCEANS;MANMADE_DISASTER_IMPLIED;TAX_FNCACT_FISHERMEN;MANMADE_DISASTER_IMPLIED;TAX_FNCACT_FISHERMEN;TAX_FNCACT_ADMINISTRATOR;CRISISLEX_T03_DEAD;FOOD_SECURITY;TAX_DISEASE_STARVATION;", "mentionednames": ";Muammar_Gaddafi;A_Europe_Sea;I_Ministry;Reuters;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-72.4167, 19.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Haiti", "urltone": 2.52, "url": "http://reliefweb.int/job/1992729/cash-based-response-coordinator", "mentionedthemes": ";TAX_FNCACT_COORDINATORS;CRISISLEX_T11_UPDATESSYMPATHY;WB_1654_ACTIVE_LABOR_MARKET_POLICIES;WB_1661_EMPLOYMENT_INCENTIVES;WB_855_LABOR_MARKETS;WB_1665_CASH_FOR_WORK;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;CRISISLEX_CRISISLEXREC;EDUCATION;WB_470_EDUCATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.0833, 4.6000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Bogota, Cundinamarca, Colombia", "urltone": -3.46, "url": "https://www.debate.com.mx/mundo/Indignante-durante-12-anos-fue-maltratado-por-su-madre-20170418-0228.html", "mentionedthemes": ";AFFECT;GENERAL_HEALTH;FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;ARREST;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_FNCACT_AUTHORITIES;CRISISLEX_CRISISLEXREC;EPU_POLICY_AUTHORITIES;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-74.0833, 4.6000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Bogota, Cundinamarca, Colombia", "urltone": -3.46, "url": "https://www.debate.com.mx/mundo/Indignante-durante-12-anos-fue-maltratado-por-su-madre-20170418-0228.html", "mentionedthemes": ";AFFECT;GENERAL_HEALTH;FOOD_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;MEDICAL;SOC_POINTSOFINTEREST_HOSPITAL;CRISISLEX_C03_WELLBEING_HEALTH;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_FNCACT_AUTHORITIES;CRISISLEX_CRISISLEXREC;EPU_POLICY_AUTHORITIES;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Sudan", "urltone": 2.43, "url": "http://apanews.net/fr/news/le-soudan-en-campagne-de-charme-pour-attirer-les-investisseurs-emiratis-et-coreens", "mentionedthemes": ";ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;ENV_OIL;ENV_OIL;ECON_WORLDCURRENCIES_SUDANESE_POUND;TAX_ETHNICITY_SUDANESE;TAX_ECON_PRICE;EPU_ECONOMY;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [70.0000, -10.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Indian Ocean, Oc, ", "urltone": -2.58, "url": "http://www.agweb.com/agday/article/india-prepares-for-normal-monsoon-rainfall-again-blmg/", "mentionedthemes": ";ECON_INFLATION;WB_1104_MACROECONOMIC_VULNERABILITY_AND_DEBT;WB_442_INFLATION;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_VICE_PRESIDENT;LEADER;TAX_FNCACT_PRESIDENT;USPEC_POLITICS_GENERAL1;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;NATURAL_DISASTER_MONSOON;CRISISLEX_O01_WEATHER;TAX_ETHNICITY_INDIAN;USPEC_POLICY1;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;", "mentionednames": ";Faiyaz_Hudani;Pacific_Ocean;El_Nino;Kotak_Commodity_Services_Ltd;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Venezuela", "urltone": -7.12, "url": "http://www.taringa.net/posts/noticias/19847895/Venezuela-un-regimen-enriquecido-en-un-pais-empobrecido.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;TAX_WORLDLANGUAGES_MADURA;NATURAL_DISASTER_DROUGHTS;POVERTY;GENERAL_GOVERNMENT;GENERAL_GOVERNMENT;GENERAL_GOVERNMENT;FOOD_SECURITY;CRIME_LOOTING;TAX_ETHNICITY_VENEZUELAN;TAX_ETHNICITY_VENEZUELAN;LEADER;TAX_FNCACT_PRESIDENTS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Syria", "urltone": -3.92, "url": "http://www.alayam.com/online/international/645702/News.html", "mentionedthemes": ";SHORTAGE;FOOD_SECURITY;TERROR;ARMEDCONFLICT;TAX_RELIGION_ISLAMIC;TAX_RELIGION_ISLAMIC;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [100.0000, 60.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Russia", "urltone": -3.92, "url": "http://www.alayam.com/online/international/645702/News.html", "mentionedthemes": ";SHORTAGE;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;MILITARY;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Syria", "urltone": -3.92, "url": "http://www.alayam.com/online/international/645702/News.html", "mentionedthemes": ";SHORTAGE;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;MILITARY;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Iraq", "urltone": -3.92, "url": "http://www.alayam.com/online/international/645702/News.html", "mentionedthemes": ";SHORTAGE;FOOD_SECURITY;TERROR;ARMEDCONFLICT;TAX_RELIGION_ISLAMIC;TAX_RELIGION_ISLAMIC;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [133.0000, -27.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Australia", "urltone": 2.00, "url": "http://www.westernmagazine.com.au/story/4597508/love-for-ag-drives-rebecca/?cs=4190", "mentionedthemes": ";AGRICULTURE;AGRICULTURE;RURAL;WB_2670_JOBS;WB_696_PUBLIC_SECTOR_MANAGEMENT;WB_2048_COMPENSATION_CAREERS_AND_INCENTIVES;WB_723_PUBLIC_ADMINISTRATION;WB_724_HUMAN_RESOURCES_FOR_PUBLIC_SECTOR;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_1950_AGRICULTURE_TECHNOLOGY;WB_1949_CLIMATE_SMART_AGRICULTURE;WB_197_AGRICULTURAL_RESEARCH;ENV_CLIMATECHANGE;UNGP_CLIMATE_CHANGE_ACTION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [48.0000, 15.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Yemen", "urltone": -5.44, "url": "http://www.momyznews.com/world/120781.html", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;TAX_DISEASE_MALNUTRITION;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;DISABILITY;WB_1458_HEALTH_PROMOTION_AND_DISEASE_PREVENTION;WB_635_PUBLIC_HEALTH;WB_1464_HEALTH_OF_THE_DISABLED;WB_621_HEALTH_NUTRITION_AND_POPULATION;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;TAX_FNCACT_COORDINATOR;TAX_AIDGROUPS_UNICEF;TAX_AIDGROUPS_UNICEF;AFFECT;TAX_FNCACT_CHILDREN;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-95.0000, 60.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Canada", "urltone": -0.91, "url": "http://www.huffingtonpost.ca/2017/04/18/automation-canada-inequality-bank-of-canada_n_16084044.html", "mentionedthemes": ";AGRICULTURE;WB_2433_CONFLICT_AND_VIOLENCE;WB_2465_REVOLUTIONARY_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;WB_2462_POLITICAL_VIOLENCE_AND_WAR;FOOD_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_ECON_PRICE;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;EDUCATION;SCIENCE;SOC_INNOVATION;TAX_FNCACT_WORKERS;USPEC_POLICY1;EPU_POLICY_POLICYMAKERS;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [8.0000, 16.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Niger", "urltone": -7.53, "url": "http://www.voaafrique.com/a/en-images-la-malnutrition-a-diffa-/3815802.html", "mentionedthemes": ";GENERAL_HEALTH;MEDICAL;GENERAL_HEALTH;MEDICAL;TAX_FNCACT_ENVOY;TAX_FNCACT_DOCTOR;MED_MEDICALTOURISM;TOURISM;TAX_FNCACT_TOURISTS;MED_MEDICALTOURISM;TOURISM;TAX_FNCACT_TOURISTS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;TAX_FNCACT_CHILD;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Venezuela", "urltone": 2.53, "url": "http://www.analitica.com/economia/ayudas-economicas-de-venezuela-a-nicaragua-cayeron-438-en-2016/", "mentionedthemes": ";ENV_OIL;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;GENERAL_HEALTH;MEDICAL;SOVEREIGNTY;URBAN;EDUCATION;WB_470_EDUCATION;SANITATION;WB_137_WATER;WB_139_SANITATION_AND_WASTEWATER;WB_2000_SANITATION;WB_1199_WATER_SUPPLY_AND_SANITATION;CRISISLEX_C06_WATER_SANITATION;TAX_FNCACT_TREASURER;", "mentionednames": ";Pdvsa;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Syria", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_TERROR_GROUP_DAASH;TAX_TERROR_GROUP_DAASH;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;SOC_GENERALCRIME;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;CRISISLEX_C07_SAFETY;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [100.0000, 60.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Russia", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;ARREST;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Syria", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;TAX_TERROR_GROUP_DAASH;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Syria", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;ARREST;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [44.0000, 33.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Iraq", "urltone": -4.82, "url": "http://www.alhayat.com/Articles/21381461/%D9%81%D8%B1%D8%A7%D8%B1-%D8%AC%D9%86%D9%88%D8%AF-%D8%A3%D8%B3%D8%B1%D9%89-%D9%84%D8%AF%D9%89-%D9%81%D8%B5%D9%8A%D9%84-%D8%B4%D8%B1%D9%82-%D8%AF%D9%85%D8%B4%D9%82", "mentionedthemes": ";SHORTAGE;GENERAL_HEALTH;FOOD_SECURITY;KILL;CRISISLEX_T03_DEAD;TAX_TERROR_GROUP_DAASH;TAX_TERROR_GROUP_DAASH;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;SOC_GENERALCRIME;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;CRISISLEX_C07_SAFETY;MEDICAL;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_FNCACT_CHILDREN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [20.7500, 43.7500] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Serbia", "urltone": 3.54, "url": "http://www.swedenabroad.com/en-GB/Embassies/Belgrade/Current-affairs/News/Green-and-Clean--Food-for-Tomorrow-sys/", "mentionedthemes": ";EDUCATION;TAX_FNCACT_PROFESSOR;TAX_FNCACT_DIRECTOR;USPEC_POLICY1;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_AMBASSADOR;ENV_CLIMATECHANGE;WB_567_CLIMATE_CHANGE;CRISISLEX_CRISISLEXREC;UNGP_CLIMATE_CHANGE_ACTION;URBAN;WB_476_GREEN_GROWTH;WB_471_ECONOMIC_GROWTH;WB_1100_SUSTAINABLE_GROWTH;TAX_FNCACT_DRIVER;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": ";Nova_Iskra;Jan_Lundin;Johan_Kuylenstierna;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [11.9667, 57.7167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Gothenburg, Vastra Gotalands Lan, Sweden", "urltone": 3.54, "url": "http://www.swedenabroad.com/en-GB/Embassies/Belgrade/Current-affairs/News/Green-and-Clean--Food-for-Tomorrow-sys/", "mentionedthemes": ";USPEC_POLICY1;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_REPRESENTATIVES;TAX_FNCACT_FARMERS;ENV_CLIMATECHANGE;WB_567_CLIMATE_CHANGE;CRISISLEX_CRISISLEXREC;UNGP_CLIMATE_CHANGE_ACTION;URBAN;URBAN;WB_476_GREEN_GROWTH;WB_471_ECONOMIC_GROWTH;WB_1100_SUSTAINABLE_GROWTH;AGRICULTURE;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": ";Jonas_Lindh;Jonas_Lindh;Nova_Iskra;William_Bailey;William_Bailey;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [20.4681, 44.8186] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Belgrade, Serbia (General), ", "urltone": 3.54, "url": "http://www.swedenabroad.com/en-GB/Embassies/Belgrade/Current-affairs/News/Green-and-Clean--Food-for-Tomorrow-sys/", "mentionedthemes": ";EDUCATION;TAX_FNCACT_PROFESSOR;USPEC_POLICY1;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_REPRESENTATIVES;ENV_CLIMATECHANGE;WB_567_CLIMATE_CHANGE;CRISISLEX_CRISISLEXREC;UNGP_CLIMATE_CHANGE_ACTION;URBAN;URBAN;WB_476_GREEN_GROWTH;WB_471_ECONOMIC_GROWTH;WB_1100_SUSTAINABLE_GROWTH;AGRICULTURE;AGRICULTURE;UNGP_FORESTS_RIVERS_OCEANS;", "mentionednames": ";Jonas_Lindh;Jonas_Lindh;Nova_Iskra;William_Bailey;William_Bailey;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [45.3253, 15.4610] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Marib, Ma'rib, Yemen", "urltone": -6.79, "url": "http://www.arabianbusiness.com/saudi-soldiers-killed-in-yemen-helicopter-crash-671272.html", "mentionedthemes": ";GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;TERROR;REBELS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2451_REBELS_GUERRILLAS_AND_INSURGENTS;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;WB_2445_NON_STATE_SECURITY_ACTORS;CRISISLEX_C07_SAFETY;CEASEFIRE;MILITARY;TAX_MILITARY_TITLE_SOLDIERS;TAX_FNCACT_SOLDIERS;MILITARY;TAX_MILITARY_TITLE_SOLDIERS;TAX_FNCACT_SOLDIERS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;CRISISLEX_T03_DEAD;CRISISLEX_T03_DEAD;CRISISLEX_T03_DEAD;TAX_ETHNICITY_ARAB;ALLIANCE;ALLIANCE;ALLIANCE;", "mentionednames": ";United_Nations;United_Nations;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";WB_2470_PEACE_OPERATIONS_AND_CONFLICT_MANAGEMENT;WB_2490_NATIONAL_PROTECTION_AND_SECURITY;EPU_CATS_NATIONAL_SECURITY;TAX_FNCACT_OFFICERS;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;FOOD_SECURITY;TAX_FNCACT_AUTHORITIES;EPU_POLICY_AUTHORITIES;LEGISLATION;EPU_POLICY_LAW;PUBLIC_TRANSPORT;IMMIGRATION;WB_2837_IMMIGRATION;WB_2836_MIGRATION_POLICIES_AND_JOBS;EPU_POLICY_POLITICAL;TAX_ETHNICITY_VENEZUELAN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Venezuela", "urltone": -2.86, "url": "http://reliefweb.int/report/brazil/venezuela-humanitarian-crisis-spilling-brazil", "mentionedthemes": ";WB_2470_PEACE_OPERATIONS_AND_CONFLICT_MANAGEMENT;WB_2490_NATIONAL_PROTECTION_AND_SECURITY;EPU_CATS_NATIONAL_SECURITY;TAX_FNCACT_OFFICERS;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;SECURITY_SERVICES;TAX_FNCACT_POLICE;CRISISLEX_C07_SAFETY;TAX_ETHNICITY_VENEZUELANS;TAX_ETHNICITY_VENEZUELANS;SOC_POINTSOFINTEREST_HEADQUARTERS;FOOD_SECURITY;TAX_FNCACT_AUTHORITIES;EPU_POLICY_AUTHORITIES;LEGISLATION;EPU_POLICY_LAW;PUBLIC_TRANSPORT;EPU_POLICY_POLITICAL;TAX_ETHNICITY_VENEZUELAN;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "South Sudan", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";TAX_FNCACT_WOMAN;TAX_FNCACT_CHILD;TAX_FNCACT_AID_WORKERS;SLFID_ECONOMIC_DEVELOPMENTAID;CRISISLEX_O02_RESPONSEAGENCIESATCRISIS;TAX_FNCACT_WORKERS;KILL;CRISISLEX_T03_DEAD;REFUGEES;AFFECT;DISPLACED;TAX_FNCACT_CHIEF;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_WORKERS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";Ugochi_Daniels;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "South Sudan", "urltone": -4.72, "url": "http://www.un.org/apps/news/story.asp?NewsID=56580", "mentionedthemes": ";TAX_FNCACT_WOMAN;TAX_FNCACT_CHILD;TAX_FNCACT_AID_WORKERS;SLFID_ECONOMIC_DEVELOPMENTAID;CRISISLEX_O02_RESPONSEAGENCIESATCRISIS;TAX_FNCACT_WORKERS;KILL;CRISISLEX_T03_DEAD;REFUGEES;AFFECT;DISPLACED;TAX_FNCACT_CHIEF;TAX_FNCACT_WOMEN;TAX_DISEASE_OUTBREAK;WB_635_PUBLIC_HEALTH;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_2167_PANDEMICS;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_WORKERS;WB_2433_CONFLICT_AND_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;UNGP_CRIME_VIOLENCE;", "mentionednames": ";Ugochi_Daniels;Fragile_Contexts_Branch;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [34.0000, -13.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Malawi", "urltone": 0.97, "url": "http://www.maravipost.com/take-malawi-state-presidents-remembered-3/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_170_AGRICULTURAL_POLICIES;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1978_AGRICULTURE_AND_RELATED_SUBSIDIES;ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;AGRICULTURE;TAX_FOODSTAPLES_GRAIN;WB_135_TRANSPORT;WB_1803_TRANSPORT_INFRASTRUCTURE;WB_167_PORTS;TAX_WORLDFISH_FISH;LEGISLATION;EPU_POLICY_LAW;", "mentionednames": ";Development_Strategy;Parliament_Building;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [34.0000, -13.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Malawi", "urltone": 0.97, "url": "http://www.maravipost.com/take-malawi-state-presidents-remembered-3/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_170_AGRICULTURAL_POLICIES;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1978_AGRICULTURE_AND_RELATED_SUBSIDIES;ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;AGRICULTURE;TAX_FOODSTAPLES_GRAIN;WB_135_TRANSPORT;WB_1803_TRANSPORT_INFRASTRUCTURE;WB_167_PORTS;TAX_WORLDFISH_FISH;LEGISLATION;EPU_POLICY_LAW;", "mentionednames": ";Parliament_Building;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [34.0000, -13.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Malawi", "urltone": 0.97, "url": "http://www.maravipost.com/take-malawi-state-presidents-remembered-3/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_170_AGRICULTURAL_POLICIES;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1978_AGRICULTURE_AND_RELATED_SUBSIDIES;ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;AGRICULTURE;TAX_FOODSTAPLES_GRAIN;WB_135_TRANSPORT;WB_1803_TRANSPORT_INFRASTRUCTURE;WB_167_PORTS;TAX_WORLDFISH_FISH;SOC_POINTSOFINTEREST_AIRPORT;WB_1804_AIRPORTS;", "mentionednames": ";Kamuzu_International_Airport;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [35.2667, -16.9167] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Nsanje, Nsanje, Malawi", "urltone": 0.97, "url": "http://www.maravipost.com/take-malawi-state-presidents-remembered-3/", "mentionedthemes": ";CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;WB_170_AGRICULTURAL_POLICIES;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1978_AGRICULTURE_AND_RELATED_SUBSIDIES;ECON_SUBSIDIES;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;WB_1050_AQUACULTURE;WB_1949_CLIMATE_SMART_AGRICULTURE;AGRICULTURE;TAX_FOODSTAPLES_GRAIN;WB_135_TRANSPORT;WB_1803_TRANSPORT_INFRASTRUCTURE;WB_167_PORTS;TAX_WORLDFISH_FISH;LEGISLATION;EPU_POLICY_LAW;", "mentionednames": ";Development_Strategy;Parliament_Building;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [121.0000, 23.5000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Taiwan", "urltone": 2.45, "url": "http://news.ltn.com.tw/news/life/paper/1095382", "mentionedthemes": ";TAX_FNCACT_DEPUTY;TAX_FNCACT_EXECUTIVE;TAX_FNCACT_PILOT;TAX_FNCACT_PILOT;EPU_ECONOMY_HISTORIC;AGRICULTURE;ECON_WORLDCURRENCIES_YUAN;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;USPEC_POLICY1;EPU_POLICY_POLICY;TAX_FNCACT_CHAIRMAN;EDUCATION;WB_470_EDUCATION;WB_1948_SUBSIDIES;WB_695_POVERTY;WB_706_EVIDENCE_BASED_POLICY;TAX_ECON_PRICE;TAX_WORLDLANGUAGES_TAICHUNG;WB_2936_GOLD;WB_507_ENERGY_AND_EXTRACTIVES;WB_895_MINING_SYSTEMS;WB_1699_METAL_ORE_MINING;", "mentionednames": ";Nan_Taitung;Ministry_Of_Education;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-72.4167, 19.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Haiti", "urltone": 2.52, "url": "http://reliefweb.int/job/1992729/cash-based-response-coordinator", "mentionedthemes": ";TAX_FNCACT_COORDINATORS;SOC_INNOVATION;UNGP_FORESTS_RIVERS_OCEANS;CRISISLEX_T11_UPDATESSYMPATHY;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;TAX_FNCACT_PRINCE;CRISISLEX_CRISISLEXREC;WB_135_TRANSPORT;WB_1803_TRANSPORT_INFRASTRUCTURE;WB_167_PORTS;EDUCATION;WB_470_EDUCATION;WB_1608_CASH_TRANSFERS;WB_1466_SOCIAL_ASSISTANCE;WB_697_SOCIAL_PROTECTION_AND_LABOR;TAX_FNCACT_COORDINATOR;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-4.0000, 40.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Spain", "urltone": 0.94, "url": "http://www.dailyprogress.com/lifestyles/hilde-lee-savor-corn-s-rich-history-by-tasting-souffl/article_d76a478e-213d-11e7-b545-5be5f801726b.html", "mentionedthemes": ";TERROR;REBELS;WB_2451_REBELS_GUERRILLAS_AND_INSURGENTS;WB_2445_NON_STATE_SECURITY_ACTORS;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_2433_CONFLICT_AND_VIOLENCE;WB_2465_REVOLUTIONARY_VIOLENCE;WB_2432_FRAGILITY_CONFLICT_AND_VIOLENCE;WB_2462_POLITICAL_VIOLENCE_AND_WAR;WB_2936_GOLD;WB_507_ENERGY_AND_EXTRACTIVES;WB_895_MINING_SYSTEMS;WB_1699_METAL_ORE_MINING;WB_2936_GOLD;WB_507_ENERGY_AND_EXTRACTIVES;WB_895_MINING_SYSTEMS;WB_1699_METAL_ORE_MINING;TAX_FOODSTAPLES_CORN;TAX_FOODSTAPLES_CORN;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;TAX_ETHNICITY_SPANISH;TAX_WORLDLANGUAGES_SPANISH;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.5000, 45.1667] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Croatia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";MEDICAL;TAX_DISEASE_SALMONELLA;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;WB_1921_PRIVATE_SECTOR_DEVELOPMENT;WB_405_BUSINESS_CLIMATE;WB_2531_INSPECTIONS_LICENSING_AND_PERMITS;WB_2530_BUSINESS_ENVIRONMENT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, -2.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Rwanda", "urltone": -4.31, "url": "http://www.newtimes.co.rw/section/article/2017-04-19/210907/", "mentionedthemes": ";TAX_FOODSTAPLES_CEREALS;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;AGRICULTURE;TAX_FNCACT_FARMERS;TAX_FNCACT_MINISTER;TAX_DISEASE_OUTBREAK;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_2167_PANDEMICS;TAX_DISEASE_OUTBREAK;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_2167_PANDEMICS;TAX_FNCACT_AGENTS;TAX_FOODSTAPLES_SORGHUM;TAX_FNCACT_OFFICIALS;UNGP_FORESTS_RIVERS_OCEANS;TAX_FOODSTAPLES_MAIZE;TAX_FOODSTAPLES_MAIZE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [38.0000, 35.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:30:00Z", "name": "Syria", "urltone": -3.92, "url": "http://www.alayam.com/online/international/645702/News.html", "mentionedthemes": ";SHORTAGE;FOOD_SECURITY;TERROR;TAX_RELIGION_ISLAMIC;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;GENERAL_GOVERNMENT;EPU_POLICY_GOVERNMENT;MANMADE_DISASTER_IMPLIED;MANMADE_DISASTER_IMPLIED;WB_1331_HEALTH_TECHNOLOGIES;WB_1350_PHARMACEUTICALS;WB_621_HEALTH_NUTRITION_AND_POPULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;USPEC_POLICY1;EPU_POLICY_REGULATION;EPU_CATS_REGULATION;TAX_ETHNICITY_RUSSIAN;TAX_WORLDLANGUAGES_RUSSIAN;", "mentionednames": ";Russian_Air;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [32.0000, 1.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Uganda", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";TAX_FNCACT_SENATORS;USPEC_POLITICS_GENERAL1;ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;TAX_FNCACT_SENATOR;TAX_ETHNICITY_AMERICAN;TAX_FNCACT_CHAIRPERSON;LEADER;TAX_FNCACT_PRESIDENT;DEMOCRACY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;EPU_POLICY_REFORM;SLFID_ECONOMIC_DEVELOPMENTAID;CRISISLEX_T07_SERVICESNEEDEDOFFERED;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_VICTIMS;CRISISLEX_CRISISLEXREC;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;TAX_POLITICAL_PARTY_REPUBLICAN;TAX_ECON_PRICE;", "mentionednames": ";Chris_Coons;Donald_Trump;Senate_Foreign_Relations_Committee;United_States;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-75.5148, 39.3498] }, "properties": {  "urlpubtimedate": "2017-04-18T22:15:00Z", "name": "Delaware, United States", "urltone": -3.30, "url": "http://www.bignewsnetwork.com/news/252829578/as-famine-looms-us-senators-seek-more-efficient-food-aid", "mentionedthemes": ";ARMEDCONFLICT;EPU_CATS_NATIONAL_SECURITY;REBELLION;WB_739_POLITICAL_VIOLENCE_AND_CIVIL_WAR;WB_738_SOCIAL_COHESION;WB_134_SOCIAL_DEVELOPMENT;TAX_FNCACT_SENATOR;TAX_ETHNICITY_AMERICAN;TAX_FNCACT_CHAIRPERSON;DEMOCRACY;AFFECT;REFUGEES;EPU_CATS_MIGRATION_FEAR_MIGRATION;USPEC_POLICY1;EPU_POLICY_REFORM;AID_HUMANITARIAN;FOOD_SECURITY;NATURAL_DISASTER_FAMINE;TAX_FNCACT_VICTIMS;CRISISLEX_CRISISLEXREC;CRISISLEX_T08_MISSINGFOUNDTRAPPEDPEOPLE;TAX_POLITICAL_PARTY_REPUBLICAN;TAX_ECON_PRICE;", "mentionednames": ";Chris_Coons;Senate_Foreign_Relations_Committee;United_States;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [-66.0000, 8.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Venezuela", "urltone": -9.00, "url": "http://www.todayonline.com/world/detained-opposition-activists-say-venezuela-authorities-tortured-them", "mentionedthemes": ";TAX_FNCACT_WITCH;SOC_GENERALCRIME;FOOD_SECURITY;SHORTAGE;VIOLENT_UNREST;TAX_WEAPONS_RUBBER_BULLETS;TAX_WEAPONS_BOMBS;CRISISLEX_T01_CAUTION_ADVICE;UNREST_STONETHROWING;TAX_WEAPONS_TEAR_GAS;TAX_FNCACT_PROSECUTORS;EPU_POLICY_POLITICAL;EPU_ECONOMY;EPU_ECONOMY_HISTORIC;TAX_FNCACT_AUTHORITIES;CRISISLEX_CRISISLEXREC;EPU_POLICY_AUTHORITIES;ECON_BUDGET_DEFICIT;WB_696_PUBLIC_SECTOR_MANAGEMENT;WB_840_JUSTICE;WB_2495_DETENTION_PRISON_AND_CORRECTIONS_REFORM;WB_2470_PEACE_OPERATIONS_AND_CONFLICT_MANAGEMENT;WB_1014_CRIMINAL_JUSTICE;WB_2490_NATIONAL_PROTECTION_AND_SECURITY;TAX_FNCACT_OFFICIALS;WB_2433_CONFLICT_AND_VIOLENCE;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [20.7500, 43.7500] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Serbia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";MEDICAL;TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;WB_1921_PRIVATE_SECTOR_DEVELOPMENT;WB_405_BUSINESS_CLIMATE;WB_2531_INSPECTIONS_LICENSING_AND_PERMITS;WB_2530_BUSINESS_ENVIRONMENT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.5000, 45.1667] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Croatia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;TAX_FNCACT_MANUFACTURER;TAX_ETHNICITY_CROATIAN;TAX_WORLDLANGUAGES_CROATIAN;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;", "mentionednames": ";Montenegro_Administration;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.0000, 46.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Slovenia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";MEDICAL;TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;WB_1921_PRIVATE_SECTOR_DEVELOPMENT;WB_405_BUSINESS_CLIMATE;WB_2531_INSPECTIONS_LICENSING_AND_PERMITS;WB_2530_BUSINESS_ENVIRONMENT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;TAX_FNCACT_MANUFACTURER;TAX_ETHNICITY_CROATIAN;TAX_WORLDLANGUAGES_CROATIAN;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;", "mentionednames": "" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [15.5000, 45.1667] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Croatia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;TAX_FNCACT_MANUFACTURER;TAX_ETHNICITY_CROATIAN;TAX_WORLDLANGUAGES_CROATIAN;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;", "mentionednames": ";Montenegro_Administration;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [16.4339, 46.3844] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Cakovec, Medimurska, Croatia", "urltone": -0.45, "url": "http://www.blic.rs/vesti/svet/u-hrvatskoj-pronadena-salmonela-u-pilecim-prsima/9p857lj", "mentionedthemes": ";TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;TAX_DISEASE_SALMONELLA;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;WB_1979_NATURAL_RESOURCE_MANAGEMENT;WB_1986_MOUNTAINS;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;CRISISLEX_C07_SAFETY;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FOODSTAPLES_MEAT;TAX_FNCACT_MANUFACTURER;TAX_FNCACT_MANUFACTURER;TAX_ETHNICITY_CROATIAN;TAX_WORLDLANGUAGES_CROATIAN;WB_2670_JOBS;WB_1467_EDUCATION_FOR_ALL;WB_470_EDUCATION;WB_2131_EMPLOYABILITY_SKILLS_AND_JOBS;WB_1484_EDUCATION_SKILLS_DEVELOPMENT_AND_LABOR_MARKET;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;TAX_ETHNICITY_BLACK;", "mentionednames": ";Montenegro_Administration;" } },
+{ "type": "Feature", "geometry": { "type": "Point", "coordinates": [30.0000, -2.0000] }, "properties": {  "urlpubtimedate": "2017-04-18T22:45:00Z", "name": "Rwanda", "urltone": -4.31, "url": "http://www.newtimes.co.rw/section/article/2017-04-19/210907/", "mentionedthemes": ";TAX_FOODSTAPLES_CEREALS;WB_1458_HEALTH_PROMOTION_AND_DISEASE_PREVENTION;WB_1541_DEWORMING;WB_635_PUBLIC_HEALTH;WB_621_HEALTH_NUTRITION_AND_POPULATION;WB_503_SCHOOL_HEALTH;CRISISLEX_C07_SAFETY;FOOD_SECURITY;WB_199_FOOD_SECURITY;WB_435_AGRICULTURE_AND_FOOD_SECURITY;WB_1967_AGRICULTURAL_RISK_AND_SECURITY;UNGP_AFFORDABLE_NUTRITIOUS_FOOD;AGRICULTURE;TAX_FNCACT_FARMERS;AGRICULTURE;TAX_FNCACT_FARMERS;MILITARY;TAX_FNCACT_FARMER;TAX_WORLDINSECTS_ARMYWORMS;TAX_AGRICULHARMINSECTS_ARMYWORMS;TAX_DISEASE_OUTBREAK;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_2167_PANDEMICS;TAX_DISEASE_OUTBREAK;WB_2165_HEALTH_EMERGENCIES;WB_2166_HEALTH_EMERGENCY_PREPAREDNESS_AND_DISASTER_RESPONSE;WB_2167_PANDEMICS;TAX_FNCACT_AGENTS;TAX_FNCACT_OFFICIALS;TAX_FOODSTAPLES_MAIZE;TAX_FOODSTAPLES_MAIZE;", "mentionednames": ";Fall_Army_Worm;" } }
+
+] }
+
+},{}],33:[function(require,module,exports){
 
 module.exports = function typingEffect() {
   document.addEventListener('DOMContentLoaded', function() {
@@ -13282,4 +17054,4 @@ module.exports = function typingEffect() {
   });
 }
 
-},{}]},{},[2]);
+},{}]},{},[31]);

@@ -3892,6 +3892,25 @@ a.thumbnail {
 .qgs__map #hero-map {
   z-index: -100; }
 
+.gps_ring {
+  border: 0.25rem solid #28597f;
+  -webkit-border-radius: 30px;
+  height: 2rem;
+  width: 2rem;
+  -webkit-animation: pulsate 2s ease-out;
+  -webkit-animation-iteration-count: infinite;
+  /*opacity: 0.0*/ }
+
+@-webkit-keyframes pulsate {
+  0% {
+    -webkit-transform: scale(0.1, 0.1);
+    opacity: 0.0; }
+  50% {
+    opacity: 1.0; }
+  100% {
+    -webkit-transform: scale(1.2, 1.2);
+    opacity: 0.0; } }
+
 /* required styles */
 .leaflet-pane,
 .leaflet-tile,
