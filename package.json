@@ -1,0 +1,36 @@
+{
+  "name": "corewebstarterkit",
+  "version": "1.0.0",
+  "description": "Simple dev environment to optimize small scale projects",
+  "main": "index.js",
+  "scripts": {
+    "boot": "npm install && gulp",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sashimii/CoreWebStarterKit.git"
+  },
+  "author": "Sushil Tailor <stailor@thestar.ca> (https://www.thestar.com)",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/sashimii/CoreWebStarterKit/issues"
+  },
+  "homepage": "https://github.com/sashimii/CoreWebStarterKit#readme",
+  "devDependencies": {
+    "browser-sync": "^2.18.7",
+    "browserify": "^14.0.0",
+    "bulkify": "^1.4.2",
+    "gulp": "^3.9.1",
+    "gulp-bundle-assets": "^2.27.1",
+    "gulp-concat": "^2.6.1",
+    "gulp-sass": "^3.1.0",
+    "vinyl-source-stream": "^1.1.0"
+  },
+  "dependencies": {
+    "foundation-sites": "^6.3.0",
+    "gulp-imagemin": "^3.1.1",
+    "imagemin-jpegtran": "^5.0.2",
+    "imagemin-pngquant": "^5.0.0"
+  }
+}
