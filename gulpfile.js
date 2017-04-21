@@ -9,6 +9,7 @@ var sass = require('gulp-sass');
 var imagemin = require('gulp-imagemin');
 var pngquant = require('imagemin-pngquant');
 var jpegtran = require('imagemin-jpegtran');
+var babel = require('babelify');
 
 var files = {
   css: {
@@ -88,6 +89,10 @@ gulp.task('foundation-scripts', () => {
 
 gulp.task('app-scripts', () => {
   return browserify(files.appJs.src)
+    .transform(babel, {   
+      "presets": [ "es2015" ],
+      "plugins": ["inferno"]
+    })
     .bundle()
     //Pass desired output filename to vinyl-source-stream
     .pipe(source('app.js'))

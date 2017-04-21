@@ -1,13 +1,15 @@
 var typed = require('./typed');
 var leaflet = require('leaflet');
 var sampleData = require('./sampleData.json');
+import BlogRoll from './blogroll.inferno';
+import Inferno from 'inferno';
 
 var axios = require('axios');
 
 typed();
 
 
-var mymap = leaflet.map('hero-map', {
+var map = leaflet.map('hero-map', {
   attributionControl: false,
   zoomControl: false,
 }).setView([35, -30], 3);
@@ -16,7 +18,7 @@ leaflet.tileLayer('https://api.mapbox.com/styles/v1/mapbox/light-v9/tiles/256/{z
     attribution: '',
     maxZoom: 18,
     continuousWorld: false,
-}).addTo(mymap);
+}).addTo(map);
 
 // Define an icon called pulseRing
 var pulseRing = leaflet.divIcon({
@@ -35,9 +37,22 @@ var listOfLocations = {
 }
 //
 // Object.keys(listOfLocations).forEach((location) => {
-//   leaflet.marker(listOfLocations[location], {icon: pulseRing}).addTo(mymap);
+//   leaflet.marker(listOfLocations[location], {icon: pulseRing}).addTo(map);
 // });
 
-sampleData.features.forEach((feature) => {
-  leaflet.marker(feature.geometry.coordinates, {icon: pulseRing}).addTo(mymap);
+let markers = sampleData.features.map((feature) => {
+  return feature.geometry.coordinates;
+  // leaflet.marker(feature.geometry.coordinates, {icon: pulseRing}).addTo(map);
 });
+let markerGroup = leaflet.layerGroup().addTo(map);
+
+markers.forEach((marker, index, array) => {
+  if(index % 9 === 0) {
+    leaflet.marker(marker, {icon: pulseRing}).addTo(markerGroup);
+  }
+});
+
+Inferno.render(
+  <BlogRoll userName="votesushi"/>,
+  document.getElementById("blogroll")
+);
