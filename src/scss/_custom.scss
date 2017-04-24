@@ -65,6 +65,23 @@ $ring-red: $primary-color; // #ca2f2f;
 
 }
 
+.blogroll {
+  padding:4rem;
+  h1 {
+    font-family: "Times New Roman", serif;
+    color: $primary-black;
+  }
+  .blog-item {
+    margin-left: 2rem;
+    a {
+      font-family: "Helvetica", sans-serif;
+      font-weight: 700;
+
+      color: $primary-color;
+    }
+  }
+}
+
 .typed-cursor{
 	opacity: 1;
 	-webkit-animation: blink 2s infinite;

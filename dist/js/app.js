@@ -20111,24 +20111,46 @@ var BlogRoll = function (_Component) {
   function BlogRoll(props) {
     _classCallCheck(this, BlogRoll);
 
-    return _possibleConstructorReturn(this, (BlogRoll.__proto__ || Object.getPrototypeOf(BlogRoll)).call(this, props));
+    var _this = _possibleConstructorReturn(this, (BlogRoll.__proto__ || Object.getPrototypeOf(BlogRoll)).call(this, props));
+
+    _this.state = {
+      data: []
+    };
+    return _this;
   }
 
   _createClass(BlogRoll, [{
     key: 'componentDidMount',
     value: function componentDidMount() {
+      var _this2 = this;
+
       if (this.props.userName) {
-        _axios2.default.get('https://medium.com/feed/@' + this.props.userName, {
-          headers: { 'Content-Type': 'text/xml' }
-        }).then(function (request) {
-          console.log(request.data);
+        _axios2.default.get('http://tps-qgs.herokuapp.com/api/medium/feed/' + this.props.userName).then(function (request) {
+          _this2.setState({ data: request.data });
         });
       }
     }
   }, {
+    key: '_getPubDate',
+    value: function _getPubDate(isoDate) {
+      var date = new Date(isoDate);
+      return date.getUTCFullYear() + '-' + (date.getUTCMonth() + 1) + '-' + date.getUTCDate() + 'T';
+    }
+  }, {
     key: 'render',
     value: function render() {
-      return createVNode(2, 'div', 'row', createVNode(2, 'h1', null, 'Blog'));
+      var _this3 = this;
+
+      if (this.state.data.length > 0) {
+
+        return createVNode(2, 'div', 'row', createVNode(2, 'div', 'small-12 columns blogroll', [createVNode(2, 'h1', null, 'Blog'), this.state.data.map(function (item) {
+          return createVNode(2, 'div', 'blog-item', [createVNode(2, 'a', null, createVNode(2, 'h3', null, item.title), {
+            'href': item.link
+          }), createVNode(2, 'span', null, _this3._getPubDate(item.pubDate))]);
+        })]));
+      } else {
+        return null;
+      }
     }
   }]);
 

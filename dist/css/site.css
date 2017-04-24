@@ -3853,6 +3853,18 @@ a.thumbnail {
     .qgs__hero .lead-text .italics {
       font-style: italic; }
 
+.blogroll {
+  padding: 4rem; }
+  .blogroll h1 {
+    font-family: "Times New Roman", serif;
+    color: #141414; }
+  .blogroll .blog-item {
+    margin-left: 2rem; }
+    .blogroll .blog-item a {
+      font-family: "Helvetica", sans-serif;
+      font-weight: 700;
+      color: #28597f; }
+
 .typed-cursor {
   opacity: 1;
   -webkit-animation: blink 2s infinite;
