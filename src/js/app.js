@@ -39,7 +39,19 @@ var listOfLocations = {
 // Object.keys(listOfLocations).forEach((location) => {
 //   leaflet.marker(listOfLocations[location], {icon: pulseRing}).addTo(map);
 // });
+let gdeltTheme= 'LEGISLATION';
+axios.get('http://tps-qgs.herokuapp.com/api/gdelt/' + gdeltTheme)
+  .then((res) => {
+    const data = res.data;
+    let markerGroup = leaflet.layerGroup().addTo(map);
 
+    data.forEach((marker, index, array) => {
+      if(index % 20 === 0) {
+        leaflet.marker(marker, {icon: pulseRing}).addTo(markerGroup);
+      }
+    });
+
+  })
 let markers = sampleData.features.map((feature) => {
   return feature.geometry.coordinates;
   // leaflet.marker(feature.geometry.coordinates, {icon: pulseRing}).addTo(map);

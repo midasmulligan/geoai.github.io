@@ -20056,7 +20056,17 @@ var listOfLocations = {
 // Object.keys(listOfLocations).forEach((location) => {
 //   leaflet.marker(listOfLocations[location], {icon: pulseRing}).addTo(map);
 // });
+var gdeltTheme = 'LEGISLATION';
+axios.get('http://tps-qgs.herokuapp.com/api/gdelt/' + gdeltTheme).then(function (res) {
+  var data = res.data;
+  var markerGroup = leaflet.layerGroup().addTo(map);
 
+  data.forEach(function (marker, index, array) {
+    if (index % 20 === 0) {
+      leaflet.marker(marker, { icon: pulseRing }).addTo(markerGroup);
+    }
+  });
+});
 var markers = sampleData.features.map(function (feature) {
   return feature.geometry.coordinates;
   // leaflet.marker(feature.geometry.coordinates, {icon: pulseRing}).addTo(map);
