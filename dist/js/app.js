@@ -20081,7 +20081,7 @@ markers.forEach(function (marker, index, array) {
 
 var createVNode = _inferno2.default.createVNode;
 _inferno2.default.render(createVNode(16, _blogroll2.default, null, null, {
-  'userName': 'the-fence-post'
+  'userName': '@QGSTechologies'
 }), document.getElementById("blogroll"));
 
 },{"./blogroll.inferno":74,"./sampleData.json":75,"./typed":76,"axios":20,"inferno":70,"leaflet":71}],74:[function(require,module,exports){
