@@ -1,0 +1,152 @@
+$primary-color: #28597f;
+$primary-black: #141414;
+
+$ring-red: $primary-color; // #ca2f2f;
+
+.qgs__nav {
+  background: white;
+  li {
+    a {
+      font-family: "Helvetica", sans-serif;
+      font-weight: 700;
+      color: $primary-black;
+      text-transform: uppercase;
+    }
+    padding: 2rem 1.5rem;
+  }
+}
+
+
+.qgs__logo {
+  width: 9rem;
+  position: absolute;
+  top: 2rem;
+  left: 2rem;
+  z-index: 100;
+}
+
+.qgs__hero {
+  // background-color: #e1e1e1;
+  position: absolute;
+  width: 100%;
+  top: 6.4rem;
+  background-color: rgba(255,255,255,0.5);
+  .lead-text {
+    .typing-effect {
+      color: $primary-color;
+    }
+
+    text-align:center;
+    padding: 11rem 0 13.5rem 0;
+
+    h1, h2 {
+      font-family: "Times New Roman", serif;
+    }
+
+    h1 {
+      font-size: 3rem;
+    }
+
+    h2 {
+      font-size: 2.3rem;
+      margin-left: 0.4rem;
+      line-height: 0.5rem;
+    }
+
+    .capital {
+      text-transform: uppercase;
+    }
+
+    .italics {
+      font-style: italic;
+    }
+
+  }
+
+}
+
+.blogroll {
+  padding:4rem;
+
+  h1 {
+    font-family: "Helvetica", sans-serif;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: $primary-black;
+  }
+  .blog-posts {
+    margin-top: 2rem;
+  }
+  .blog-item {
+    margin-left: 2rem;
+    a {
+      h3 {
+        font-family: "Times New Roman", serif;
+        font-style: italic;
+        /* text-transform: uppercase; */
+        font-size: 1.5rem;
+        color: $primary-color;
+      }
+    }
+  }
+}
+
+.typed-cursor{
+	opacity: 1;
+	-webkit-animation: blink 2s infinite;
+	-moz-animation: blink 2s infinite;
+	animation: blink 2s infinite;
+  font-weight: 700;
+  display: inline-block;
+}
+@keyframes blink{
+	0% { opacity:1; }
+	50% { opacity:0; }
+	100% { opacity:1; }
+}
+@-webkit-keyframes blink{
+	0% { opacity:1; }
+	50% { opacity:0; }
+	100% { opacity:1; }
+}
+@-moz-keyframes blink{
+	0% { opacity:1; }
+	50% { opacity:0; }
+	100% { opacity:1; }
+}
+
+
+#hero-map {
+  height: 30rem;
+  width: 100%;
+}
+
+.qgs__map {
+
+  #hero-map {
+
+    z-index: -100;
+  }
+
+}
+
+
+.pulse-ring {
+
+}
+
+.gps_ring {
+    border: 0.25rem solid $ring-red;
+     -webkit-border-radius: 30px;
+     height: 2rem;
+     width: 2rem;
+    -webkit-animation: pulsate 2s ease-out;
+    -webkit-animation-iteration-count: infinite;
+    /*opacity: 0.0*/
+}
+
+@-webkit-keyframes pulsate {
+        0% {-webkit-transform: scale(0.1, 0.1); opacity: 0.0;}
+        50% {opacity: 1.0;}
+        100% {-webkit-transform: scale(1.2, 1.2); opacity: 0.0;}
+}
