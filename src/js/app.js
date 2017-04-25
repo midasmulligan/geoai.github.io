@@ -65,6 +65,6 @@ markers.forEach((marker, index, array) => {
 });
 
 Inferno.render(
-  <BlogRoll userName="votesushi"/>,
+  <BlogRoll userName="the-fence-post"/>,
   document.getElementById("blogroll")
 );

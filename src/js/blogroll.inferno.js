@@ -6,49 +6,39 @@ export default class BlogRoll extends Component {
   constructor(props) {
     super(props);
     this.state = {
-      data: []
+      data: false
     }
   }
 
   componentDidMount() {
     if(this.props.userName) {
-      axios.get(`http://tps-qgs.herokuapp.com/api/medium/feed/${this.props.userName}`)
+      axios.get(`https://tps-qgs.herokuapp.com/api/medium/feed/${this.props.userName}`)
       .then((request) => {
         this.setState({data: request.data});
       });
     }
   }
 
-  _getPubDate(isoDate) {
-    const date = new Date(isoDate);
-    return date.getUTCFullYear()+'-'
-      + (date.getUTCMonth()+1) +'-'
-      + date.getUTCDate() +'T';
-  }
-
   render() {
-    if(this.state.data.length > 0) {
-
-      return (
-        <div className="row">
-          <div className="small-12 columns blogroll">
-            <h1>Blog</h1>
-            {
-              this.state.data.map((item) => {
-                return (
-                  <div className="blog-item">
-                    <a href={item.link}><h3>{item.title}</h3></a>
-                    <span>{this._getPubDate(item.pubDate)}</span>
-                  </div>
-                );
-              })
-            }
-          </div>
-        </div>
-      )
-    } else {
+    if(!this.state.data) {
       return null;
     }
-
+    return (
+      <div className="row blogroll">
+        <h1 className="text-center">Updates</h1>
+        <div className="blog-posts small-12 medium-6 columns small-centered">
+          {
+            this.state.data.map((item) => {
+              return (
+                <div className="blog-item">
+                  <a href={item.link}><h3>{item.title}</h3></a>
+                  <hr/>
+                </div>
+              )
+            })
+          }
+        </div>
+      </div>
+    );
   }
 }

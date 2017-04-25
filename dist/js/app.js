@@ -20081,7 +20081,7 @@ markers.forEach(function (marker, index, array) {
 
 var createVNode = _inferno2.default.createVNode;
 _inferno2.default.render(createVNode(16, _blogroll2.default, null, null, {
-  'userName': 'votesushi'
+  'userName': 'the-fence-post'
 }), document.getElementById("blogroll"));
 
 },{"./blogroll.inferno":74,"./sampleData.json":75,"./typed":76,"axios":20,"inferno":70,"leaflet":71}],74:[function(require,module,exports){
@@ -20124,7 +20124,7 @@ var BlogRoll = function (_Component) {
     var _this = _possibleConstructorReturn(this, (BlogRoll.__proto__ || Object.getPrototypeOf(BlogRoll)).call(this, props));
 
     _this.state = {
-      data: []
+      data: false
     };
     return _this;
   }
@@ -20135,32 +20135,22 @@ var BlogRoll = function (_Component) {
       var _this2 = this;
 
       if (this.props.userName) {
-        _axios2.default.get('http://tps-qgs.herokuapp.com/api/medium/feed/' + this.props.userName).then(function (request) {
+        _axios2.default.get('https://tps-qgs.herokuapp.com/api/medium/feed/' + this.props.userName).then(function (request) {
           _this2.setState({ data: request.data });
         });
       }
     }
   }, {
-    key: '_getPubDate',
-    value: function _getPubDate(isoDate) {
-      var date = new Date(isoDate);
-      return date.getUTCFullYear() + '-' + (date.getUTCMonth() + 1) + '-' + date.getUTCDate() + 'T';
-    }
-  }, {
     key: 'render',
     value: function render() {
-      var _this3 = this;
-
-      if (this.state.data.length > 0) {
-
-        return createVNode(2, 'div', 'row', createVNode(2, 'div', 'small-12 columns blogroll', [createVNode(2, 'h1', null, 'Blog'), this.state.data.map(function (item) {
-          return createVNode(2, 'div', 'blog-item', [createVNode(2, 'a', null, createVNode(2, 'h3', null, item.title), {
-            'href': item.link
-          }), createVNode(2, 'span', null, _this3._getPubDate(item.pubDate))]);
-        })]));
-      } else {
+      if (!this.state.data) {
         return null;
       }
+      return createVNode(2, 'div', 'row blogroll', [createVNode(2, 'h1', 'text-center', 'Updates'), createVNode(2, 'div', 'blog-posts small-12 medium-6 columns small-centered', this.state.data.map(function (item) {
+        return createVNode(2, 'div', 'blog-item', [createVNode(2, 'a', null, createVNode(2, 'h3', null, item.title), {
+          'href': item.link
+        }), createVNode(2, 'hr')]);
+      }))]);
     }
   }]);
 
